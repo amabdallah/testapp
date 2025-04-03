@@ -56,6 +56,10 @@ def generate_plot():
     df = pd.DataFrame(data["data"], columns=["date", "value"])
     df.rename(columns={"date": "Date", "value": "DISCHARGE"}, inplace=True)
 
+    # Convert 'Date' to datetime and sort
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df = df.sort_values(by='Date')
+
     # Metadata
     metadata_fields = ["station_id", "station_name", "system_name", "units"]
     metadata = {field: data.get(field, "N/A") for field in metadata_fields}
@@ -130,6 +134,7 @@ def generate_plot():
 
     fig.update_layout(
         title=plot_title,
+        xaxis=dict(type='date'),  # Force x-axis to be time-series
         yaxis_title="Mean Daily Discharge (CFS)",
         legend=dict(orientation="h", y=-0.2, x=0.5),
         template="plotly_white",
