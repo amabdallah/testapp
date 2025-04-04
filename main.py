@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, render_template_string
 import requests
 import pandas as pd
@@ -76,4 +77,4 @@ def generate_plot():
     return render_template_string(HTML_TEMPLATE, plot_json=plot_json, site_id=site_id)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
