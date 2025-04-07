@@ -43,12 +43,15 @@ def plot_site():
         data = response.json()
         if "data" not in data:
             return "No 'data' key in API response", 500
-    except Exception as e:
-        return f"API error: {str(e)}", 500
+    except requests.exceptions.RequestException as e:
+        return f"API request error: {str(e)}", 500
+    except ValueError:
+        return "Failed to decode JSON from API response", 500
 
     df = pd.DataFrame(data["data"], columns=["date", "value"])
     df.rename(columns={"date": "Date", "value": "DISCHARGE"}, inplace=True)
     df["DISCHARGE"] = pd.to_numeric(df["DISCHARGE"], errors='coerce')
+    df = df.dropna(subset=['DISCHARGE'])
 
     metadata_fields = ["station_id", "station_name", "system_name", "units"]
     metadata = {field: data.get(field, "N/A") for field in metadata_fields}
@@ -58,7 +61,7 @@ def plot_site():
     df['FLAG_NEGATIVE'] = (df['DISCHARGE'] < 0) & (df['DISCHARGE'] != 0)
     df['FLAG_ZERO'] = (df['DISCHARGE'] == 0)
 
-    discharge_95 = np.percentile(df[df['DISCHARGE'] != 0]['DISCHARGE'].dropna(), 95)
+    discharge_95 = np.percentile(df[df['DISCHARGE'] != 0]['DISCHARGE'], 95)
     df['FLAG_Discharge'] = (df['DISCHARGE'] > discharge_95) & (df['DISCHARGE'] != 0)
 
     Q1, Q3 = df[df['DISCHARGE'] != 0]['DISCHARGE'].quantile([0.25, 0.75])
@@ -75,7 +78,7 @@ def plot_site():
         .transform('count') >= 3
     )
 
-    df_clean = df[df['DISCHARGE'] != 0].dropna(subset=['DISCHARGE'])
+    df_clean = df[df['DISCHARGE'] != 0].copy() # Avoid SettingWithCopyWarning
     model = IsolationForest(contamination=0.05, random_state=42)
     df_clean['OUTLIER_IF'] = model.fit_predict(df_clean[['DISCHARGE']])
     df['OUTLIER_IF'] = False
@@ -102,8 +105,10 @@ def plot_site():
     df["Date"] = df["Date"].dt.strftime('%Y-%m-%dT%H:%M:%S')
 
     fig.add_trace(go.Scatter(
-        x=df['Date'], y=df['DISCHARGE'],
-        mode='lines', line=dict(color='lightgray', width=1.5),
+        x=df['Date'].tolist(),
+        y=df['DISCHARGE'].tolist(),
+        mode='lines',
+        line=dict(color='lightgray', width=1.5),
         name='Mean Daily Discharge'
     ))
 
@@ -111,8 +116,10 @@ def plot_site():
         subset = df[df[flag]]
         if not subset.empty:
             fig.add_trace(go.Scatter(
-                x=subset['Date'], y=subset['DISCHARGE'],
-                mode='markers', marker=dict(color=color, size=7),
+                x=subset['Date'].tolist(),
+                y=subset['DISCHARGE'].tolist(),
+                mode='markers',
+                marker=dict(color=color, size=7),
                 name=name
             ))
 
