@@ -5,6 +5,7 @@ from flask import Flask, request, render_template_string
 import requests
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.utils  # ✅ Added for proper serialization
 from datetime import datetime
 
 # Initialize Flask app and logging
@@ -24,7 +25,7 @@ HTML_TEMPLATE = """
     <h2>Discharge Data for Site ID: {{ site_id }}</h2>
     <div id="plot"></div>
     <script>
-        var plot_data = {{ plot_json | tojson | safe }};
+        var plot_data = {{ plot_json | safe }};
         Plotly.newPlot('plot', plot_data.data, plot_data.layout);
     </script>
 </body>
@@ -66,9 +67,6 @@ def generate_plot():
         df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
         df = df.sort_values(by="Date", ascending=True, ignore_index=True)
         df["DISCHARGE"] = pd.to_numeric(df["DISCHARGE"], errors='coerce')
-
-        # Log column names for debugging
-        logging.info(f"Data columns: {df.columns.tolist()}")
 
         # Add metadata fields
         metadata_fields = ["station_id", "station_name", "system_name", "units"]
@@ -113,7 +111,10 @@ def generate_plot():
             height=700
         )
 
-        return render_template_string(HTML_TEMPLATE, plot_json=fig.to_dict(), site_id=site_id)
+        # ✅ Properly serialize the figure to JSON
+        plot_json = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+
+        return render_template_string(HTML_TEMPLATE, plot_json=plot_json, site_id=site_id)
 
     except Exception as e:
         logging.exception("Unexpected error while processing data")
