@@ -1,31 +1,27 @@
 import os
-import json
-import logging
-from flask import Flask, request, render_template_string
 import requests
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.utils  # ✅ Added for proper serialization
+import numpy as np
 from datetime import datetime
+from sklearn.ensemble import IsolationForest
+from flask import Flask, request, render_template_string
+import plotly.graph_objects as go
 
-# Initialize Flask app and logging
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Discharge Data Plot</title>
+    <title>Discharge Flags</title>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
     <h2>Discharge Data for Site ID: {{ site_id }}</h2>
     <div id="plot"></div>
     <script>
-        var plot_data = {{ plot_json | safe }};
+        var plot_data = {{ plot_json | tojson | safe }};
         Plotly.newPlot('plot', plot_data.data, plot_data.layout);
     </script>
 </body>
@@ -33,93 +29,103 @@ HTML_TEMPLATE = """
 """
 
 @app.route('/plot')
-def generate_plot():
-    site_id = request.args.get('id')
+def plot_site():
+    site_id = request.args.get("id")
     if not site_id:
-        return "Error: No site ID provided. Use ?id=5 in the URL.", 400
+        return "Missing 'id' parameter in query string", 400
 
     end_date = datetime.today().strftime("%Y-%m-%d")
     api_url = f"https://www.waterrights.utah.gov/dvrtdb/daily-chart.asp?station_id={site_id}&end_date={end_date}&f=json"
-    logging.info(f"Fetching data from: {api_url}")
 
     try:
         response = requests.get(api_url, timeout=10)
         response.raise_for_status()
         data = response.json()
-    except requests.exceptions.Timeout:
-        logging.error("API request timed out.")
-        return "The data source took too long to respond. Please try again later.", 504
-    except requests.exceptions.RequestException as e:
-        logging.error(f"API request failed: {e}")
-        return "Error retrieving data from the external source.", 502
+        if "data" not in data:
+            return "No 'data' key in API response", 500
     except Exception as e:
-        logging.error(f"Error parsing JSON: {e}")
-        return "Failed to parse response from external API.", 500
+        return f"API error: {str(e)}", 500
 
-    if "data" not in data or not data["data"]:
-        logging.warning(f"No data found in API response for site ID {site_id}")
-        return "No discharge data available for this site.", 404
+    df = pd.DataFrame(data["data"], columns=["date", "value"])
+    df.rename(columns={"date": "Date", "value": "DISCHARGE"}, inplace=True)
+    df["DISCHARGE"] = pd.to_numeric(df["DISCHARGE"], errors='coerce')
 
-    try:
-        # Build DataFrame
-        df = pd.DataFrame(data["data"], columns=["date", "value"])
-        df.rename(columns={"date": "Date", "value": "DISCHARGE"}, inplace=True)
-        df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
-        df = df.sort_values(by="Date", ascending=True, ignore_index=True)
-        df["DISCHARGE"] = pd.to_numeric(df["DISCHARGE"], errors='coerce')
+    metadata_fields = ["station_id", "station_name", "system_name", "units"]
+    metadata = {field: data.get(field, "N/A") for field in metadata_fields}
+    for k, v in metadata.items():
+        df[k] = v
 
-        # Add metadata fields
-        metadata_fields = ["station_id", "station_name", "system_name", "units"]
-        metadata = {field: data.get(field, "N/A") for field in metadata_fields}
-        for key, value in metadata.items():
-            df[key] = value
+    df['FLAG_NEGATIVE'] = (df['DISCHARGE'] < 0) & (df['DISCHARGE'] != 0)
+    df['FLAG_ZERO'] = (df['DISCHARGE'] == 0)
 
-        # Format date for plot
-        df["Date"] = df["Date"].dt.strftime('%Y-%m-%dT%H:%M:%S')
+    discharge_95 = np.percentile(df[df['DISCHARGE'] != 0]['DISCHARGE'].dropna(), 95)
+    df['FLAG_Discharge'] = (df['DISCHARGE'] > discharge_95) & (df['DISCHARGE'] != 0)
 
-        # Start building plot
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df["Date"],
-            y=df["DISCHARGE"],
-            mode="lines",
-            line=dict(color="gray", width=1.5),
-            name="Mean Daily Discharge"
-        ))
+    Q1, Q3 = df[df['DISCHARGE'] != 0]['DISCHARGE'].quantile([0.25, 0.75])
+    IQR = Q3 - Q1
+    df['FLAG_IQR'] = ((df['DISCHARGE'] < Q1 - 1.5 * IQR) | (df['DISCHARGE'] > Q3 + 1.5 * IQR)) & (df['DISCHARGE'] != 0)
 
-        # Optional: FLAG handling
-        flag_colors = {
-            'FLAG_NEGATIVE': ('red', 'Negative (-)'),
-            'FLAG_ZERO': ('blue', 'Value = 0'),
-        }
+    df['RATE_OF_CHANGE'] = df['DISCHARGE'].diff().abs()
+    df['FLAG_RoC'] = (df['RATE_OF_CHANGE'] > discharge_95) & (df['DISCHARGE'] != 0)
 
-        for flag, (color, label) in flag_colors.items():
-            if flag in df.columns:
-                subset = df[df[flag]]
-                if not subset.empty:
-                    fig.add_trace(go.Scatter(
-                        x=subset["Date"],
-                        y=subset["DISCHARGE"],
-                        mode="markers",
-                        marker=dict(color=color, size=7),
-                        name=label
-                    ))
+    df['FLAG_REPEATED'] = (
+        df['DISCHARGE']
+        .where(df['DISCHARGE'] != 0)
+        .groupby((df['DISCHARGE'] != df['DISCHARGE'].shift()).cumsum())
+        .transform('count') >= 3
+    )
 
-        fig.update_layout(
-            title=f"Flagged Data Points for {metadata.get('station_name', 'Station ' + site_id)}",
-            width=1400,
-            height=700
-        )
+    df_clean = df[df['DISCHARGE'] != 0].dropna(subset=['DISCHARGE'])
+    model = IsolationForest(contamination=0.05, random_state=42)
+    df_clean['OUTLIER_IF'] = model.fit_predict(df_clean[['DISCHARGE']])
+    df['OUTLIER_IF'] = False
+    df.loc[df_clean.index, 'OUTLIER_IF'] = df_clean['OUTLIER_IF'] == -1
 
-        # ✅ Properly serialize the figure to JSON
-        plot_json = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+    df['FLAGGED'] = df[
+        ['FLAG_NEGATIVE', 'FLAG_ZERO', 'FLAG_REPEATED', 'FLAG_IQR', 'OUTLIER_IF', 'FLAG_Discharge', 'FLAG_RoC']
+    ].any(axis=1)
 
-        return render_template_string(HTML_TEMPLATE, plot_json=plot_json, site_id=site_id)
+    flag_colors = {
+        'FLAG_NEGATIVE': ('red', 'Negative (-)'),
+        'FLAG_ZERO': ('blue', 'Value = 0'),
+        'FLAG_REPEATED': ('green', 'Repeated (≥3 days)'),
+        'FLAG_RoC': ('brown', 'Rate of Change'),
+        'FLAG_IQR': ('orange', 'IQR Outlier'),
+        'OUTLIER_IF': ('teal', 'Isolation Forest'),
+        'FLAG_Discharge': ('purple', 'Above 95th Percentile')
+    }
 
-    except Exception as e:
-        logging.exception("Unexpected error while processing data")
-        return "An error occurred while generating the plot.", 500
+    fig = go.Figure()
 
+    df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
+    df = df.dropna(subset=["Date"])
+    df["Date"] = df["Date"].dt.strftime('%Y-%m-%dT%H:%M:%S')
+
+    fig.add_trace(go.Scatter(
+        x=df['Date'], y=df['DISCHARGE'],
+        mode='lines', line=dict(color='lightgray', width=1.5),
+        name='Mean Daily Discharge'
+    ))
+
+    for flag, (color, name) in flag_colors.items():
+        subset = df[df[flag]]
+        if not subset.empty:
+            fig.add_trace(go.Scatter(
+                x=subset['Date'], y=subset['DISCHARGE'],
+                mode='markers', marker=dict(color=color, size=7),
+                name=name
+            ))
+
+    fig.update_layout(
+        title=dict(text=f"Flagged Points - {metadata.get('station_name', f'Station {site_id}')}", x=0.5),
+        yaxis_title="Mean Daily Discharge (CFS)",
+        template="plotly_white",
+        width=1400,
+        height=700,
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5)
+    )
+
+    return render_template_string(HTML_TEMPLATE, plot_json=fig.to_dict(), site_id=site_id)
 
 if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
