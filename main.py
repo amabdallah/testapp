@@ -129,7 +129,7 @@ def plot_site():
             # Isolation Forest Outliers (only on non-zero values)
             df_clean = df.loc[df['DISCHARGE'] != 0, ['DISCHARGE']].copy() # Select only the column needed
             if not df_clean.empty and len(df_clean) > 1: # IF needs at least 2 points
-                 model = IsolationForest(contamination='auto', random_state=42) # Use 'auto' contamination
+                 model = IsolationForest(contamination='0.05', random_state=42) # Use 'auto' contamination
                  df_clean['OUTLIER_IF_pred'] = model.fit_predict(df_clean[['DISCHARGE']])
                  # Map predictions back to original DataFrame
                  df['OUTLIER_IF'] = False # Initialize column
