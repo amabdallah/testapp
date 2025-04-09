@@ -19,7 +19,6 @@ HTML_TEMPLATE = """
     <title>Discharge Flags for Site {{ site_id }}</title>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
-        /* Optional: Add some basic styling */
         body { font-family: sans-serif; margin: 20px; }
         h2 { color: #333; }
         .error { color: red; font-weight: bold; }
@@ -46,7 +45,6 @@ HTML_TEMPLATE = """
     {% endif %}
 
     <script>
-        // Only attempt to plot if plot_json exists
         var plot_json = {{ plot_json | default('null') | tojson | safe }};
         if (plot_json) {
             try {
@@ -64,7 +62,7 @@ HTML_TEMPLATE = """
 @app.route('/plot')
 def plot_site():
     site_id = request.args.get("id")
-    plot_json = None # Initialize plot_json
+    plot_json = None
     error_message = None
     warning_message = None
     nodata_message = None
@@ -77,7 +75,7 @@ def plot_site():
     try:
         end_date = datetime.today().strftime("%Y-%m-%d")
         api_url = f"https://www.waterrights.utah.gov/dvrtdb/daily-chart.asp?station_id={site_id}&end_date={end_date}&f=json"
-        print(f"Fetching data for site {site_id}: {api_url}") # Log API call
+        print(f"Fetching data for site {site_id}: {api_url}")
 
         response = requests.get(api_url, timeout=30)
         response.raise_for_status()
@@ -90,6 +88,7 @@ def plot_site():
             print(f"API Error Detail: {log_detail}")
             return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 502
 
+    # (Error handling for fetch remains the same)
     except requests.exceptions.Timeout:
         error_message = f"API request timed out for site {site_id}."
         return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 504
@@ -102,7 +101,7 @@ def plot_site():
     except requests.exceptions.RequestException as req_err:
         error_message = f"API connection error for site {site_id}: {str(req_err)}."
         return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 500
-    except ValueError: # Includes JSONDecodeError
+    except ValueError:
         error_message = f"Failed to decode JSON from API for site {site_id}."
         try: log_detail = response.text[:500]
         except: log_detail = "(Could not read response text)"
@@ -135,13 +134,14 @@ def plot_site():
         station_name = metadata.get('station_name', f'Station {site_id}')
         units = metadata.get('units', 'Unknown Units')
 
-        # 1. Define Seasons and Create Segmented Data
+        # 1. Define Seasons and Segment Data
         irrigation_months = [4, 5, 6, 7, 8, 9]
         df['Season'] = df['Date'].dt.month.apply(lambda month: 'Irrigation' if month in irrigation_months else 'Non-Irrigation')
         df['Discharge_Irrigation'] = df.apply(lambda row: row['DISCHARGE'] if row['Season'] == 'Irrigation' else np.nan, axis=1)
         df['Discharge_NonIrrigation'] = df.apply(lambda row: row['DISCHARGE'] if row['Season'] == 'Non-Irrigation' else np.nan, axis=1)
 
-        # 2. Flagging Criteria (condensed for brevity, logic unchanged)
+        # 2. Flagging Criteria (logic unchanged)
+        # ... (condensed for brevity) ...
         df['FLAG_NEGATIVE'] = (df['DISCHARGE'] < 0) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)
         df['FLAG_ZERO'] = (df['DISCHARGE'] == 0) & (df['DISCHARGE'].notna())
         non_zero_discharge = df[(df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)]['DISCHARGE']
@@ -162,8 +162,9 @@ def plot_site():
             mean_discharge = non_zero_discharge.mean()
             if mean_discharge != 0: df['PERCENT_DEV'] = ((df['DISCHARGE'] - mean_discharge).abs() / mean_discharge) * 100; threshold = 1000; df['FLAG_RSD'] = (df['PERCENT_DEV'] > threshold) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0) & (df['PERCENT_DEV'].notna())
             else: df['PERCENT_DEV'] = np.nan; df['FLAG_RSD'] = False
-        else: print(f"Warn: No non-zero data for complex flagging {DivrtID}"); [df.update({f: False}) for f in ['FLAG_Discharge', 'FLAG_IQR', 'FLAG_RoC', 'FLAG_REPEATED', 'OUTLIER_IF', 'FLAG_RSD']]
+        else: [df.update({f: False}) for f in ['FLAG_Discharge', 'FLAG_IQR', 'FLAG_RoC', 'FLAG_REPEATED', 'OUTLIER_IF', 'FLAG_RSD']]
         flag_cols_to_check = ['FLAG_NEGATIVE', 'FLAG_ZERO', 'FLAG_REPEATED', 'FLAG_IQR', 'OUTLIER_IF', 'FLAG_Discharge', 'FLAG_RoC', 'FLAG_RSD']; [df.update({col: False}) for col in flag_cols_to_check if col not in df.columns]; df['FLAGGED'] = df[flag_cols_to_check].any(axis=1)
+
 
         # 3. Create Plot and Add Traces
         plot_title = f"Flagged Data Points & Discharge by Season for {station_name}"
@@ -171,27 +172,24 @@ def plot_site():
         fig = go.Figure()
         line_width = 2.0
 
-        # Add Seasonal Lines - WITH .tolist()
+        # Add Seasonal Lines (with .tolist())
         fig.add_trace(go.Scatter( x=df['Date'].tolist(), y=df['Discharge_Irrigation'].tolist(), mode='lines', line=dict(color='lightgreen', width=line_width), name='Irrigation Season Discharge', connectgaps=False, showlegend=True ))
         fig.add_trace(go.Scatter( x=df['Date'].tolist(), y=df['Discharge_NonIrrigation'].tolist(), mode='lines', line=dict(color='gray', width=line_width), name='Non-Irrigation Season Discharge', connectgaps=False, showlegend=True ))
 
-        # Add Flagged Marker Traces - WITH .tolist()
-        irrigation_marker_traces = []
-        non_irrigation_marker_traces = []
-        can_plot_seasons = True
-        irrigation_season_data = df[df['Season'] == 'Irrigation'].copy()
-        non_irrigation_season_data = df[df['Season'] == 'Non-Irrigation'].copy()
+        # Add Flagged Marker Traces (with .tolist() and legendgroup strategy)
+        irrigation_marker_traces = []; non_irrigation_marker_traces = []; can_plot_seasons = True
+        irrigation_season_data = df[df['Season'] == 'Irrigation'].copy(); non_irrigation_season_data = df[df['Season'] == 'Non-Irrigation'].copy()
         for flag, (color, legend_name) in flag_colors.items():
-            if flag in irrigation_season_data.columns: # Irrigation Markers
-                subset = irrigation_season_data[irrigation_season_data[flag].fillna(False).astype(bool)]
+            if flag in irrigation_season_data.columns: # Irrigation
+                subset = irrigation_season_data[irrigation_season_data[flag].fillna(False).astype(bool)];
                 if not subset.empty: irrigation_marker_traces.append(go.Scatter( x=subset['Date'].tolist(), y=subset['DISCHARGE'].tolist(), mode='markers', marker=dict(color=color, size=7), name=legend_name, legendgroup=flag, showlegend=True, visible=True ))
-            if flag in non_irrigation_season_data.columns: # Non-Irrigation Markers
-                subset = non_irrigation_season_data[non_irrigation_season_data[flag].fillna(False).astype(bool)]
+            if flag in non_irrigation_season_data.columns: # Non-Irrigation
+                subset = non_irrigation_season_data[non_irrigation_season_data[flag].fillna(False).astype(bool)];
                 if not subset.empty: non_irrigation_marker_traces.append(go.Scatter( x=subset['Date'].tolist(), y=subset['DISCHARGE'].tolist(), mode='markers', marker=dict(color=color, size=7), name=legend_name, legendgroup=flag, showlegend=True, visible=False ))
         for trace in irrigation_marker_traces: fig.add_trace(trace)
         for trace in non_irrigation_marker_traces: fig.add_trace(trace)
 
-        # 4. Define Button Logic
+        # 4. Define Button Logic (unchanged)
         num_irr_markers = len(irrigation_marker_traces); num_nonirr_markers = len(non_irrigation_marker_traces); num_total_traces = 2 + num_irr_markers + num_nonirr_markers
         def create_visibility(show_irr_line, show_nonirr_line, show_irr_markers, show_nonirr_markers): visibility = [False] * num_total_traces; visibility[0] = show_irr_line; visibility[1] = show_nonirr_line; [visibility.__setitem__(i, True) for i in range(2, 2 + num_irr_markers) if show_irr_markers]; [visibility.__setitem__(i, True) for i in range(2 + num_irr_markers, num_total_traces) if show_nonirr_markers]; return visibility
         irrigation_visible_args = create_visibility(True, False, True, False); non_irrigation_visible_args = create_visibility(False, True, False, True); all_seasons_visible_args = create_visibility(True, True, True, True)
@@ -199,28 +197,31 @@ def plot_site():
         non_irrigation_button = dict(label="Non-Irrigation", method="update", args=[{"visible": non_irrigation_visible_args}])
         all_seasons_button = dict(label="All Seasons", method="update", args=[{"visible": all_seasons_visible_args}])
 
-        # 5. Calculate Fixed Axis Ranges
+        # 5. Calculate Fixed Axis Ranges (unchanged)
         x_range = [df['Date'].min(), df['Date'].max()]; y_min_data = df['DISCHARGE'].min(); y_max_data = df['DISCHARGE'].max()
         final_y_min = 0 if y_min_data >= 0 else y_min_data * 1.05; final_y_max = y_max_data * 1.05 if y_max_data > 0 else (y_max_data * 0.95 if y_max_data < 0 else 1)
         if final_y_min >= final_y_max: final_y_min -= 1; final_y_max += 1
         y_range = [final_y_min, final_y_max]
 
-        # 6. Update Figure Layout
+        # 6. Update Figure Layout <-- Apply axis formatting here
         fig.update_layout(
             title=dict(text=plot_title, x=0.5, y=0.98, font=dict(size=20)),
             yaxis=dict(title=f"Mean Daily Discharge ({units})", title_font=dict(size=18), tickfont=dict(size=14), range=y_range),
-            xaxis=dict(title="Date", title_font=dict(size=18), tickfont=dict(size=14), range=x_range),
+            xaxis=dict(
+                title="Date", title_font=dict(size=18), tickfont=dict(size=14), range=x_range,
+                dtick="M12",        # ***** Set tick spacing to 12 months *****
+                tickformat="%Y"     # ***** Format ticks to show only the year *****
+            ),
             legend=dict( orientation="v", yanchor="top", y=1, xanchor="left", x=1.02, title=dict(text="Flagging Criteria:", font=dict(size=16)), font=dict(size=12), tracegroupgap=5 ),
             updatemenus=[ dict( type="buttons", direction="left", buttons=[irrigation_button, non_irrigation_button, all_seasons_button], showactive=True, x=0.01, xanchor="left", y=1.05, yanchor="bottom" ) ] if can_plot_seasons and (irrigation_marker_traces or non_irrigation_marker_traces) else [],
             template="plotly_white", margin=dict(t=100, r=250), width=1500, height=800 )
 
         # 7. Convert to JSON
-        plot_json = fig.to_dict() # Convert the figure object to a dictionary
+        plot_json = fig.to_dict()
 
     except Exception as e:
         tb_str = traceback.format_exc(); print(tb_str)
         error_message = f"An error occurred during data processing or plot generation: {str(e)}"
-        # Render template with error, do not return immediately
 
     # --- Rendering ---
     return render_template_string(HTML_TEMPLATE, plot_json=plot_json, site_id=site_id, error=error_message, warning=warning_message, nodata=nodata_message)
@@ -230,5 +231,4 @@ if __name__ == '__main__':
     print("Starting Flask development server...")
     print(f"Access the plot via http://localhost:8080/plot?id=YOUR_SITE_ID (e.g., http://localhost:8080/plot?id=10987)")
     port = int(os.environ.get("PORT", 8080))
-    # Use host='0.0.0.0' to be accessible externally, host='127.0.0.1' for local only
     app.run(debug=True, host='0.0.0.0', port=port)
