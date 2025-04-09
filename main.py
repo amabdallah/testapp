@@ -85,11 +85,10 @@ def plot_site():
 
         if "data" not in data or not isinstance(data["data"], list):
             error_message = f"API response 'data' field invalid or missing for site {site_id}."
-            # Log details if possible without revealing too much sensitive info if response is huge
             try: log_detail = response.text[:500]
             except: log_detail = "(Could not read response text)"
             print(f"API Error Detail: {log_detail}")
-            return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 502 # Bad Gateway
+            return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 502
 
     except requests.exceptions.Timeout:
         error_message = f"API request timed out for site {site_id}."
@@ -110,23 +109,19 @@ def plot_site():
         print(f"API Error Detail: {log_detail}")
         return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 500
     except Exception as e:
-        tb_str = traceback.format_exc(); print(tb_str) # Log detailed traceback server-side
+        tb_str = traceback.format_exc(); print(tb_str)
         error_message = f"Unexpected error during data fetching: {str(e)}"
         return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 500
 
     # --- Data Processing & Plotting ---
     try:
-        # Create DataFrame
         if not data["data"]:
-            # Handle case where API returns success but empty data list
             nodata_message = f"No time series data returned from API for site {site_id}."
-            # Still render template, but indicate no data
             return render_template_string(HTML_TEMPLATE, nodata=nodata_message, site_id=site_id), 200
         else:
             df = pd.DataFrame(data["data"], columns=["date", "value"])
             df.rename(columns={"date": "Date", "value": "DISCHARGE"}, inplace=True)
 
-        # Convert types and clean data
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df['DISCHARGE'] = pd.to_numeric(df['DISCHARGE'], errors='coerce')
         df = df.dropna(subset=['Date', 'DISCHARGE']).sort_values(by='Date').reset_index(drop=True)
@@ -135,13 +130,10 @@ def plot_site():
             nodata_message = f"No valid, plottable data points found for site {site_id} after cleaning."
             return render_template_string(HTML_TEMPLATE, nodata=nodata_message, site_id=site_id), 200
 
-        # Extract Metadata
         metadata_fields = ["station_id", "station_name", "system_name", "units"]
         metadata = {field: data.get(field, f"N/A") for field in metadata_fields}
         station_name = metadata.get('station_name', f'Station {site_id}')
         units = metadata.get('units', 'Unknown Units')
-
-        # *** --- Start: Plotting Logic Integration --- ***
 
         # 1. Define Seasons and Create Segmented Data
         irrigation_months = [4, 5, 6, 7, 8, 9]
@@ -149,7 +141,7 @@ def plot_site():
         df['Discharge_Irrigation'] = df.apply(lambda row: row['DISCHARGE'] if row['Season'] == 'Irrigation' else np.nan, axis=1)
         df['Discharge_NonIrrigation'] = df.apply(lambda row: row['DISCHARGE'] if row['Season'] == 'Non-Irrigation' else np.nan, axis=1)
 
-        # 2. Flagging Criteria
+        # 2. Flagging Criteria (condensed for brevity, logic unchanged)
         df['FLAG_NEGATIVE'] = (df['DISCHARGE'] < 0) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)
         df['FLAG_ZERO'] = (df['DISCHARGE'] == 0) & (df['DISCHARGE'].notna())
         non_zero_discharge = df[(df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)]['DISCHARGE']
@@ -157,115 +149,60 @@ def plot_site():
             discharge_95th_percentile = np.percentile(non_zero_discharge, 95)
             df['FLAG_Discharge'] = (df['DISCHARGE'] > discharge_95th_percentile) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)
             Q1, Q3 = non_zero_discharge.quantile([0.25, 0.75]); IQR = Q3 - Q1
-            if IQR > 0:
-                lower_bound, upper_bound = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
-                df['FLAG_IQR'] = ((df['DISCHARGE'] < lower_bound) | (df['DISCHARGE'] > upper_bound)) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)
-            else: # Handle IQR=0 case
-                 df['FLAG_IQR'] = (df['DISCHARGE'] != Q1) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)
-
+            if IQR > 0: lower_bound, upper_bound = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR; df['FLAG_IQR'] = ((df['DISCHARGE'] < lower_bound) | (df['DISCHARGE'] > upper_bound)) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)
+            else: df['FLAG_IQR'] = (df['DISCHARGE'] != Q1) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)
             df['RATE_OF_CHANGE'] = df['DISCHARGE'].diff().abs()
             if 'discharge_95th_percentile' in locals(): df['FLAG_RoC'] = (df['RATE_OF_CHANGE'] > discharge_95th_percentile) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0) & (df['RATE_OF_CHANGE'].notna())
             else: df['FLAG_RoC'] = False
-            non_zero_mask = df['DISCHARGE'].notna() & (df['DISCHARGE'] != 0)
-            df['FLAG_REPEATED'] = False
-            if non_zero_mask.any():
-                 groups = (df.loc[non_zero_mask, 'DISCHARGE'] != df.loc[non_zero_mask, 'DISCHARGE'].shift()).cumsum()
-                 group_sizes = df.loc[non_zero_mask, 'DISCHARGE'].groupby(groups).transform('size')
-                 df.loc[non_zero_mask, 'FLAG_REPEATED'] = (group_sizes >= 3)
+            non_zero_mask = df['DISCHARGE'].notna() & (df['DISCHARGE'] != 0); df['FLAG_REPEATED'] = False
+            if non_zero_mask.any(): groups = (df.loc[non_zero_mask, 'DISCHARGE'] != df.loc[non_zero_mask, 'DISCHARGE'].shift()).cumsum(); group_sizes = df.loc[non_zero_mask, 'DISCHARGE'].groupby(groups).transform('size'); df.loc[non_zero_mask, 'FLAG_REPEATED'] = (group_sizes >= 3)
             df_clean = df[(df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)].copy()
-            if not df_clean.empty and df_clean['DISCHARGE'].nunique() > 1:
-                 model = IsolationForest(contamination='auto', random_state=42)
-                 df_clean['OUTLIER_IF_PREDICT'] = model.fit_predict(df_clean[['DISCHARGE']])
-                 df['OUTLIER_IF'] = False; df.loc[df_clean.index, 'OUTLIER_IF'] = (df_clean['OUTLIER_IF_PREDICT'] == -1)
+            if not df_clean.empty and df_clean['DISCHARGE'].nunique() > 1: model = IsolationForest(contamination='auto', random_state=42); df_clean['OUTLIER_IF_PREDICT'] = model.fit_predict(df_clean[['DISCHARGE']]); df['OUTLIER_IF'] = False; df.loc[df_clean.index, 'OUTLIER_IF'] = (df_clean['OUTLIER_IF_PREDICT'] == -1)
             else: df['OUTLIER_IF'] = False
             mean_discharge = non_zero_discharge.mean()
-            if mean_discharge != 0:
-                df['PERCENT_DEV'] = ((df['DISCHARGE'] - mean_discharge).abs() / mean_discharge) * 100; threshold = 1000
-                df['FLAG_RSD'] = (df['PERCENT_DEV'] > threshold) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0) & (df['PERCENT_DEV'].notna())
+            if mean_discharge != 0: df['PERCENT_DEV'] = ((df['DISCHARGE'] - mean_discharge).abs() / mean_discharge) * 100; threshold = 1000; df['FLAG_RSD'] = (df['PERCENT_DEV'] > threshold) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0) & (df['PERCENT_DEV'].notna())
             else: df['PERCENT_DEV'] = np.nan; df['FLAG_RSD'] = False
-        else: # Initialize flags if no non-zero data
-            print(f"Warning: No non-zero data for complex flagging {DivrtID}")
-            for flag_col in ['FLAG_Discharge', 'FLAG_IQR', 'FLAG_RoC', 'FLAG_REPEATED', 'OUTLIER_IF', 'FLAG_RSD']:
-                df[flag_col] = False
-
-        # Ensure all flag columns exist before consolidating FLAGGED
-        flag_cols_to_check = ['FLAG_NEGATIVE', 'FLAG_ZERO', 'FLAG_REPEATED', 'FLAG_IQR', 'OUTLIER_IF', 'FLAG_Discharge', 'FLAG_RoC', 'FLAG_RSD']
-        for col in flag_cols_to_check:
-            if col not in df.columns: df[col] = False
-        df['FLAGGED'] = df[flag_cols_to_check].any(axis=1)
-
+        else: print(f"Warn: No non-zero data for complex flagging {DivrtID}"); [df.update({f: False}) for f in ['FLAG_Discharge', 'FLAG_IQR', 'FLAG_RoC', 'FLAG_REPEATED', 'OUTLIER_IF', 'FLAG_RSD']]
+        flag_cols_to_check = ['FLAG_NEGATIVE', 'FLAG_ZERO', 'FLAG_REPEATED', 'FLAG_IQR', 'OUTLIER_IF', 'FLAG_Discharge', 'FLAG_RoC', 'FLAG_RSD']; [df.update({col: False}) for col in flag_cols_to_check if col not in df.columns]; df['FLAGGED'] = df[flag_cols_to_check].any(axis=1)
 
         # 3. Create Plot and Add Traces
         plot_title = f"Flagged Data Points & Discharge by Season for {station_name}"
-        flag_colors = { 'FLAG_NEGATIVE': ('red', 'Negative (-)'), 'FLAG_ZERO': ('blue', 'Value = 0'),
-            'FLAG_REPEATED': ('green', 'Repeated (≥3)'), 'FLAG_RoC': ('brown', 'RoC Outlier'),
-            'FLAG_IQR': ('orange', 'IQR Outlier'), 'OUTLIER_IF': ('teal', 'IF Outlier'),
-            'FLAG_Discharge': ('purple', '> 95th Perc.'), 'FLAG_RSD': ('magenta', 'RSD Outlier') }
-
+        flag_colors = { 'FLAG_NEGATIVE': ('red', 'Negative (-)'), 'FLAG_ZERO': ('blue', 'Value = 0'), 'FLAG_REPEATED': ('green', 'Repeated (≥3)'), 'FLAG_RoC': ('brown', 'RoC Outlier'), 'FLAG_IQR': ('orange', 'IQR Outlier'), 'OUTLIER_IF': ('teal', 'IF Outlier'), 'FLAG_Discharge': ('purple', '> 95th Perc.'), 'FLAG_RSD': ('magenta', 'RSD Outlier') }
         fig = go.Figure()
         line_width = 2.0
 
-        # Add Seasonal Lines
-        fig.add_trace(go.Scatter( x=df['Date'], y=df['Discharge_Irrigation'], mode='lines',
-            line=dict(color='lightgreen', width=line_width), name='Irrigation Season Discharge',
-            connectgaps=False, showlegend=True ))
-        fig.add_trace(go.Scatter( x=df['Date'], y=df['Discharge_NonIrrigation'], mode='lines',
-            line=dict(color='gray', width=line_width), name='Non-Irrigation Season Discharge',
-            connectgaps=False, showlegend=True ))
+        # Add Seasonal Lines - WITH .tolist()
+        fig.add_trace(go.Scatter( x=df['Date'].tolist(), y=df['Discharge_Irrigation'].tolist(), mode='lines', line=dict(color='lightgreen', width=line_width), name='Irrigation Season Discharge', connectgaps=False, showlegend=True ))
+        fig.add_trace(go.Scatter( x=df['Date'].tolist(), y=df['Discharge_NonIrrigation'].tolist(), mode='lines', line=dict(color='gray', width=line_width), name='Non-Irrigation Season Discharge', connectgaps=False, showlegend=True ))
 
-        # Add Flagged Marker Traces (using legendgroup strategy)
+        # Add Flagged Marker Traces - WITH .tolist()
         irrigation_marker_traces = []
         non_irrigation_marker_traces = []
-        can_plot_seasons = True # Assumed true if we got this far with data
+        can_plot_seasons = True
         irrigation_season_data = df[df['Season'] == 'Irrigation'].copy()
         non_irrigation_season_data = df[df['Season'] == 'Non-Irrigation'].copy()
-
         for flag, (color, legend_name) in flag_colors.items():
-            # Irrigation Markers
-            if flag in irrigation_season_data.columns:
+            if flag in irrigation_season_data.columns: # Irrigation Markers
                 subset = irrigation_season_data[irrigation_season_data[flag].fillna(False).astype(bool)]
-                if not subset.empty:
-                    irrigation_marker_traces.append(go.Scatter(
-                        x=subset['Date'], y=subset['DISCHARGE'], mode='markers', marker=dict(color=color, size=7),
-                        name=legend_name, legendgroup=flag, showlegend=True, visible=True ))
-            # Non-Irrigation Markers
-            if flag in non_irrigation_season_data.columns:
+                if not subset.empty: irrigation_marker_traces.append(go.Scatter( x=subset['Date'].tolist(), y=subset['DISCHARGE'].tolist(), mode='markers', marker=dict(color=color, size=7), name=legend_name, legendgroup=flag, showlegend=True, visible=True ))
+            if flag in non_irrigation_season_data.columns: # Non-Irrigation Markers
                 subset = non_irrigation_season_data[non_irrigation_season_data[flag].fillna(False).astype(bool)]
-                if not subset.empty:
-                    non_irrigation_marker_traces.append(go.Scatter(
-                        x=subset['Date'], y=subset['DISCHARGE'], mode='markers', marker=dict(color=color, size=7),
-                        name=legend_name, legendgroup=flag, showlegend=True, visible=False ))
-
+                if not subset.empty: non_irrigation_marker_traces.append(go.Scatter( x=subset['Date'].tolist(), y=subset['DISCHARGE'].tolist(), mode='markers', marker=dict(color=color, size=7), name=legend_name, legendgroup=flag, showlegend=True, visible=False ))
         for trace in irrigation_marker_traces: fig.add_trace(trace)
         for trace in non_irrigation_marker_traces: fig.add_trace(trace)
 
         # 4. Define Button Logic
-        num_irr_markers = len(irrigation_marker_traces); num_nonirr_markers = len(non_irrigation_marker_traces)
-        num_total_traces = 2 + num_irr_markers + num_nonirr_markers
-        def create_visibility(show_irr_line, show_nonirr_line, show_irr_markers, show_nonirr_markers):
-            visibility = [False] * num_total_traces
-            if show_irr_line: visibility[0] = True
-            if show_nonirr_line: visibility[1] = True
-            if show_irr_markers:
-                for i in range(2, 2 + num_irr_markers): visibility[i] = True
-            if show_nonirr_markers:
-                for i in range(2 + num_irr_markers, num_total_traces): visibility[i] = True
-            return visibility
-        irrigation_visible_args = create_visibility(True, False, True, False)
-        non_irrigation_visible_args = create_visibility(False, True, False, True)
-        all_seasons_visible_args = create_visibility(True, True, True, True)
+        num_irr_markers = len(irrigation_marker_traces); num_nonirr_markers = len(non_irrigation_marker_traces); num_total_traces = 2 + num_irr_markers + num_nonirr_markers
+        def create_visibility(show_irr_line, show_nonirr_line, show_irr_markers, show_nonirr_markers): visibility = [False] * num_total_traces; visibility[0] = show_irr_line; visibility[1] = show_nonirr_line; [visibility.__setitem__(i, True) for i in range(2, 2 + num_irr_markers) if show_irr_markers]; [visibility.__setitem__(i, True) for i in range(2 + num_irr_markers, num_total_traces) if show_nonirr_markers]; return visibility
+        irrigation_visible_args = create_visibility(True, False, True, False); non_irrigation_visible_args = create_visibility(False, True, False, True); all_seasons_visible_args = create_visibility(True, True, True, True)
         irrigation_button = dict(label="Irrigation", method="update", args=[{"visible": irrigation_visible_args}])
         non_irrigation_button = dict(label="Non-Irrigation", method="update", args=[{"visible": non_irrigation_visible_args}])
         all_seasons_button = dict(label="All Seasons", method="update", args=[{"visible": all_seasons_visible_args}])
 
         # 5. Calculate Fixed Axis Ranges
-        x_range = [df['Date'].min(), df['Date'].max()] # Use already cleaned df
-        y_min_data = df['DISCHARGE'].min(); y_max_data = df['DISCHARGE'].max() # Use already cleaned df
-        final_y_min = 0 if y_min_data >= 0 else y_min_data * 1.05
-        if y_max_data > 0: final_y_max = y_max_data * 1.05
-        elif y_max_data == 0: final_y_max = 1;
-        else: final_y_max = y_max_data * 0.95 # Adjust if max is negative
-        if final_y_min >= final_y_max: final_y_min -= 1; final_y_max += 1 # Fallback
+        x_range = [df['Date'].min(), df['Date'].max()]; y_min_data = df['DISCHARGE'].min(); y_max_data = df['DISCHARGE'].max()
+        final_y_min = 0 if y_min_data >= 0 else y_min_data * 1.05; final_y_max = y_max_data * 1.05 if y_max_data > 0 else (y_max_data * 0.95 if y_max_data < 0 else 1)
+        if final_y_min >= final_y_max: final_y_min -= 1; final_y_max += 1
         y_range = [final_y_min, final_y_max]
 
         # 6. Update Figure Layout
@@ -273,44 +210,25 @@ def plot_site():
             title=dict(text=plot_title, x=0.5, y=0.98, font=dict(size=20)),
             yaxis=dict(title=f"Mean Daily Discharge ({units})", title_font=dict(size=18), tickfont=dict(size=14), range=y_range),
             xaxis=dict(title="Date", title_font=dict(size=18), tickfont=dict(size=14), range=x_range),
-            legend=dict( orientation="v", yanchor="top", y=1, xanchor="left", x=1.02,
-                         title=dict(text="Flagging Criteria:", font=dict(size=16)), font=dict(size=12), tracegroupgap=5 ),
-            updatemenus=[ dict( type="buttons", direction="left",
-                            buttons=[irrigation_button, non_irrigation_button, all_seasons_button],
-                            showactive=True, x=0.01, xanchor="left", y=1.05, yanchor="bottom" )
-            ] if can_plot_seasons and (irrigation_marker_traces or non_irrigation_marker_traces) else [],
-            template="plotly_white", margin=dict(t=100, r=250),
-            width=1500, height=800 )
+            legend=dict( orientation="v", yanchor="top", y=1, xanchor="left", x=1.02, title=dict(text="Flagging Criteria:", font=dict(size=16)), font=dict(size=12), tracegroupgap=5 ),
+            updatemenus=[ dict( type="buttons", direction="left", buttons=[irrigation_button, non_irrigation_button, all_seasons_button], showactive=True, x=0.01, xanchor="left", y=1.05, yanchor="bottom" ) ] if can_plot_seasons and (irrigation_marker_traces or non_irrigation_marker_traces) else [],
+            template="plotly_white", margin=dict(t=100, r=250), width=1500, height=800 )
 
         # 7. Convert to JSON
-        # Note: No explicit date string conversion needed IF using fig.to_dict(),
-        # as it generally handles datetime objects correctly for Plotly.js
-        plot_json = fig.to_dict()
-
-        # *** --- End: Plotting Logic Integration --- ***
+        plot_json = fig.to_dict() # Convert the figure object to a dictionary
 
     except Exception as e:
-        # Catch errors during pandas/sklearn/plotly processing
-        tb_str = traceback.format_exc(); print(tb_str) # Log detailed traceback server-side
+        tb_str = traceback.format_exc(); print(tb_str)
         error_message = f"An error occurred during data processing or plot generation: {str(e)}"
-        # Don't return immediately, render template with error message
-        # return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 500
+        # Render template with error, do not return immediately
 
     # --- Rendering ---
-    # Render the HTML template, passing plot data, site ID, and any error/warning
-    # Status code 200 even if processing had non-fatal issues but we show a message
-    return render_template_string(HTML_TEMPLATE,
-                                  plot_json=plot_json, # Will be None if plotting errored
-                                  site_id=site_id,
-                                  error=error_message,
-                                  warning=warning_message,
-                                  nodata=nodata_message)
-
+    return render_template_string(HTML_TEMPLATE, plot_json=plot_json, site_id=site_id, error=error_message, warning=warning_message, nodata=nodata_message)
 
 # --- Main execution block ---
 if __name__ == '__main__':
     print("Starting Flask development server...")
     print(f"Access the plot via http://localhost:8080/plot?id=YOUR_SITE_ID (e.g., http://localhost:8080/plot?id=10987)")
-    # Make sure port is integer
     port = int(os.environ.get("PORT", 8080))
+    # Use host='0.0.0.0' to be accessible externally, host='127.0.0.1' for local only
     app.run(debug=True, host='0.0.0.0', port=port)
