@@ -72,6 +72,7 @@ def plot_site():
         return render_template_string(HTML_TEMPLATE, error=error_message, site_id="N/A"), 400
 
     # --- Data Fetching ---
+    # (Error handling for fetch remains the same)
     try:
         end_date = datetime.today().strftime("%Y-%m-%d")
         api_url = f"https://www.waterrights.utah.gov/dvrtdb/daily-chart.asp?station_id={site_id}&end_date={end_date}&f=json"
@@ -82,10 +83,12 @@ def plot_site():
         if "data" not in data or not isinstance(data["data"], list):
              error_message = f"API response 'data' field invalid or missing for site {site_id}."
              return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 502
-    except Exception as e:
+    except Exception as e: # Catch all fetch errors here
+        # (Consolidated error handling for fetch)
         tb_str = traceback.format_exc(); print(tb_str)
         error_message = f"Error fetching data: {str(e)}"
         return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 500
+
 
     # --- Data Processing & Plotting ---
     try:
@@ -115,7 +118,7 @@ def plot_site():
         df['Discharge_Irrigation'] = df.apply(lambda row: row['DISCHARGE'] if row['Season'] == 'Irrigation' else np.nan, axis=1)
         df['Discharge_NonIrrigation'] = df.apply(lambda row: row['DISCHARGE'] if row['Season'] == 'Non-Irrigation' else np.nan, axis=1)
 
-        # 2. Flagging Criteria (logic unchanged, condensed)
+        # 2. Flagging Criteria (logic unchanged, condensed for brevity)
         # ... (full flagging logic as before) ...
         df['FLAG_NEGATIVE'] = (df['DISCHARGE'] < 0) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)
         df['FLAG_ZERO'] = (df['DISCHARGE'] == 0) & (df['DISCHARGE'].notna())
@@ -140,7 +143,6 @@ def plot_site():
         else: [df.update({f: False}) for f in ['FLAG_Discharge', 'FLAG_IQR', 'FLAG_RoC', 'FLAG_REPEATED', 'OUTLIER_IF', 'FLAG_RSD']]
         flag_cols_to_check = ['FLAG_NEGATIVE', 'FLAG_ZERO', 'FLAG_REPEATED', 'FLAG_IQR', 'OUTLIER_IF', 'FLAG_Discharge', 'FLAG_RoC', 'FLAG_RSD']; [df.update({col: False}) for col in flag_cols_to_check if col not in df.columns]; df['FLAGGED'] = df[flag_cols_to_check].any(axis=1)
 
-
         # 3. Create Plot and Add Traces (unchanged)
         plot_title = f"Flagged Data Points & Discharge by Season for {station_name}"
         flag_colors = { 'FLAG_NEGATIVE': ('red', 'Negative (-)'), 'FLAG_ZERO': ('blue', 'Value = 0'), 'FLAG_REPEATED': ('green', 'Repeated (≥3)'), 'FLAG_RoC': ('brown', 'RoC Outlier'), 'FLAG_IQR': ('orange', 'IQR Outlier'), 'OUTLIER_IF': ('teal', 'IF Outlier'), 'FLAG_Discharge': ('purple', '> 95th Perc.'), 'FLAG_RSD': ('magenta', 'RSD Outlier') }
@@ -151,10 +153,10 @@ def plot_site():
         irrigation_marker_traces = []; non_irrigation_marker_traces = []; can_plot_seasons = True
         irrigation_season_data = df[df['Season'] == 'Irrigation'].copy(); non_irrigation_season_data = df[df['Season'] == 'Non-Irrigation'].copy()
         for flag, (color, legend_name) in flag_colors.items():
-            if flag in irrigation_season_data.columns:
+            if flag in irrigation_season_data.columns: # Irrigation
                 subset = irrigation_season_data[irrigation_season_data[flag].fillna(False).astype(bool)];
                 if not subset.empty: irrigation_marker_traces.append(go.Scatter( x=subset['Date'].tolist(), y=subset['DISCHARGE'].tolist(), mode='markers', marker=dict(color=color, size=7), name=legend_name, legendgroup=flag, showlegend=True, visible=True ))
-            if flag in non_irrigation_season_data.columns:
+            if flag in non_irrigation_season_data.columns: # Non-Irrigation
                 subset = non_irrigation_season_data[non_irrigation_season_data[flag].fillna(False).astype(bool)];
                 if not subset.empty: non_irrigation_marker_traces.append(go.Scatter( x=subset['Date'].tolist(), y=subset['DISCHARGE'].tolist(), mode='markers', marker=dict(color=color, size=7), name=legend_name, legendgroup=flag, showlegend=True, visible=False ))
         for trace in irrigation_marker_traces: fig.add_trace(trace)
@@ -168,59 +170,65 @@ def plot_site():
         non_irrigation_button = dict(label="Non-Irrigation", method="update", args=[{"visible": non_irrigation_visible_args}])
         all_seasons_button = dict(label="All Seasons", method="update", args=[{"visible": all_seasons_visible_args}])
 
-        # ***** START: Calculate Dynamic Ticks and Ranges *****
-        x_range = None; y_range = None; xaxis_dtick = None; xaxis_tickformat = None
-
+        # 5. Calculate Overall Axis Ranges AND Custom Year Ticks/Labels
+        x_range = None; y_range = None; x_tickvals = None; x_ticktext = None
         if not df['Date'].empty:
             min_date = df['Date'].min()
             max_date = df['Date'].max()
-            x_range = [min_date, max_date]
+            x_range = [min_date, max_date] # Keep overall range
 
-            time_span = max_date - min_date
-            time_span_years = time_span.days / 365.25 # Approximate years
+            # Calculate specific tick values (Jan 1st) and text (Year)
+            min_year = min_date.year
+            max_year = max_date.year
+            # Ensure reasonable number of ticks; maybe only every few years if span is large
+            year_step = 1
+            if (max_year - min_year) > 15: # Example threshold: if > 15 years, label every 2 years
+                year_step = 2
+            if (max_year - min_year) > 30: # Example threshold: if > 30 years, label every 5 years
+                 year_step = 5
 
-            # Determine tick settings based on time span
-            if time_span_years >= 50: # >= 50 years: 5-year ticks
-                xaxis_dtick = "M60"
-                xaxis_tickformat = "%Y"
-                print(f"Applying 5-year ticks for {time_span_years:.1f} year span.")
-            elif time_span_years > 5:  # > 5 years up to 50: yearly ticks
-                xaxis_dtick = "M12"
-                xaxis_tickformat = "%Y"
-                print(f"Applying yearly ticks for {time_span_years:.1f} year span.")
-            elif time_span_years > 1:  # > 1 year up to 5: 6-month ticks
-                xaxis_dtick = "M6"
-                xaxis_tickformat = "%b\n%Y" # Added newline for potentially better spacing
-                print(f"Applying 6-month ticks for {time_span_years:.1f} year span.")
-            else:  # <= 1 year: monthly ticks
-                xaxis_dtick = "M1"
-                xaxis_tickformat = "%b\n%Y" # Added newline for potentially better spacing
-                print(f"Applying monthly ticks for {time_span_years:.1f} year span.")
-        else:
-             print("Warning: Date range could not be determined.")
+            years_to_label = range(min_year, max_year + 1, year_step)
+            x_tickvals = [pd.Timestamp(f'{year}-01-01') for year in years_to_label]
+            x_ticktext = [str(year) for year in years_to_label]
+
+            # Filter ticks to be within or very close to the actual data range
+            # This prevents ticks appearing way before/after the plotted data
+            x_tickvals_filtered = []
+            x_ticktext_filtered = []
+            # Add buffer (e.g., half a year) to range for filtering ticks near edges
+            range_buffer = pd.Timedelta(days=180)
+            filter_min_date = min_date - range_buffer
+            filter_max_date = max_date + range_buffer
+
+            for tv, tt in zip(x_tickvals, x_ticktext):
+                if filter_min_date <= tv <= filter_max_date:
+                    x_tickvals_filtered.append(tv)
+                    x_ticktext_filtered.append(tt)
+            # Use filtered lists if filtering produced results, else maybe fallback (though unlikely needed)
+            if x_tickvals_filtered:
+                 x_tickvals = x_tickvals_filtered
+                 x_ticktext = x_ticktext_filtered
 
         if df['DISCHARGE'].notna().any():
+            # (y_range calculation remains the same)
             y_min_data = df['DISCHARGE'].min(); y_max_data = df['DISCHARGE'].max()
             final_y_min = 0 if y_min_data >= 0 else y_min_data * 1.05; final_y_max = y_max_data * 1.05 if y_max_data > 0 else (y_max_data * 0.95 if y_max_data < 0 else 1)
             if final_y_min >= final_y_max: final_y_min -= 1; final_y_max += 1
             y_range = [final_y_min, final_y_max]
-        else:
-             print("Warning: Y-axis range could not be determined.")
-             y_range = None # Handle this possibility
-        # ***** END: Calculate Dynamic Ticks and Ranges *****
 
 
-        # 6. Update Figure Layout <-- Apply dynamic axis formatting here
+        # 6. Update Figure Layout <-- Apply custom axis ticks here
         fig.update_layout(
             title=dict(text=plot_title, x=0.5, y=0.98, font=dict(size=20)),
-            yaxis=dict(title=f"Mean Daily Discharge ({units})", title_font=dict(size=18), tickfont=dict(size=12), range=y_range), # Use 12pt for y axis ticks too
+            yaxis=dict(title=f"Mean Daily Discharge ({units})", title_font=dict(size=18), tickfont=dict(size=14), range=y_range),
             xaxis=dict(
-                title="Date", title_font=dict(size=18), tickfont=dict(size=12), # Use 12pt for x axis ticks
-                range=x_range,
-                # Apply dynamic ticks
-                dtick=xaxis_dtick,
-                tickformat=xaxis_tickformat
-                # Removed tickmode, tickvals, ticktext
+                title="Date", title_font=dict(size=18), tickfont=dict(size=14),
+                range=x_range,         # Keep overall fixed range
+                # ***** START: Custom Tick Configuration *****
+                tickmode='array',      # Use explicit tick values/text
+                tickvals=x_tickvals,   # Set the calculated tick positions (Jan 1st dates)
+                ticktext=x_ticktext    # Set the calculated tick labels (Year strings)
+                # ***** END: Custom Tick Configuration *****
             ),
             legend=dict( orientation="v", yanchor="top", y=1, xanchor="left", x=1.02, title=dict(text="Flagging Criteria:", font=dict(size=16)), font=dict(size=12), tracegroupgap=5 ),
             updatemenus=[ dict( type="buttons", direction="left", buttons=[irrigation_button, non_irrigation_button, all_seasons_button], showactive=True, x=0.01, xanchor="left", y=1.05, yanchor="bottom" ) ] if can_plot_seasons and (irrigation_marker_traces or non_irrigation_marker_traces) else [],
