@@ -135,7 +135,7 @@ def plot_site():
             non_zero_mask = df['DISCHARGE'].notna() & (df['DISCHARGE'] != 0); df['FLAG_REPEATED'] = False
             if non_zero_mask.any(): groups = (df.loc[non_zero_mask, 'DISCHARGE'] != df.loc[non_zero_mask, 'DISCHARGE'].shift()).cumsum(); group_sizes = df.loc[non_zero_mask, 'DISCHARGE'].groupby(groups).transform('size'); df.loc[non_zero_mask, 'FLAG_REPEATED'] = (group_sizes >= 3)
             df_clean = df[(df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0)].copy()
-            if not df_clean.empty and df_clean['DISCHARGE'].nunique() > 1: model = IsolationForest(contamination='auto', random_state=42); df_clean['OUTLIER_IF_PREDICT'] = model.fit_predict(df_clean[['DISCHARGE']]); df['OUTLIER_IF'] = False; df.loc[df_clean.index, 'OUTLIER_IF'] = (df_clean['OUTLIER_IF_PREDICT'] == -1)
+            if not df_clean.empty and df_clean['DISCHARGE'].nunique() > 1: model = IsolationForest(contamination=0.05, random_state=42); df_clean['OUTLIER_IF_PREDICT'] = model.fit_predict(df_clean[['DISCHARGE']]); df['OUTLIER_IF'] = False; df.loc[df_clean.index, 'OUTLIER_IF'] = (df_clean['OUTLIER_IF_PREDICT'] == -1)
             else: df['OUTLIER_IF'] = False
             mean_discharge = non_zero_discharge.mean()
             if mean_discharge != 0: df['PERCENT_DEV'] = ((df['DISCHARGE'] - mean_discharge).abs() / mean_discharge) * 100; threshold = 1000; df['FLAG_RSD'] = (df['PERCENT_DEV'] > threshold) & (df['DISCHARGE'].notna()) & (df['DISCHARGE'] != 0) & (df['PERCENT_DEV'].notna())
