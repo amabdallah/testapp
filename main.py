@@ -6,12 +6,13 @@ from datetime import datetime
 from sklearn.ensemble import IsolationForest
 from flask import Flask, request, render_template_string
 import plotly.graph_objects as go
+import plotly.utils  # <--- ADDED IMPORT
 import traceback
-import json # Added for converting fig to json robustly
+import json
 
 app = Flask(__name__)
 
-# (HTML_TEMPLATE remains the same as in the old script)
+# (HTML_TEMPLATE remains the same)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -34,12 +35,12 @@ HTML_TEMPLATE = """
         <p class="error">Error: {{ error }}</p>
     {% elif warning %}
         <p class="warning">Warning: {{ warning }}</p>
-        {% if plot_json %}
+        {% if plot_json_str %} {# Check if plot json exists for warning case #}
             <div id="plot"></div>
         {% endif %}
     {% elif nodata %}
          <p class="nodata">{{ nodata }}</p>
-    {% elif plot_json %}
+    {% elif plot_json_str %} {# Check if plot json exists for success case #}
         <div id="plot"></div>
     {% else %}
         <p class="error">An unknown issue occurred and the plot could not be generated.</p>
@@ -73,7 +74,8 @@ def plot_site():
 
     if not site_id:
         error_message = "Missing 'id' parameter in query string."
-        return render_template_string(HTML_TEMPLATE, error=error_message, site_id="N/A"), 400
+        # Pass None for plot_json_str when rendering error template
+        return render_template_string(HTML_TEMPLATE, error=error_message, site_id="N/A", plot_json_str=None), 400
 
     # --- Data Fetching ---
     try:
@@ -87,16 +89,16 @@ def plot_site():
         # Check if 'data' key exists and is a list *before* trying to access it
         if "data" not in data or not isinstance(data["data"], list):
             error_message = f"API response 'data' field is invalid or missing for site {site_id}. Response: {response.text[:500]}" # Include part of response
-            return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 502
+            return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id, plot_json_str=None), 502
 
     except requests.exceptions.RequestException as e:
         tb_str = traceback.format_exc(); print(tb_str)
         error_message = f"Error fetching data from API: {str(e)}"
-        return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 500
+        return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id, plot_json_str=None), 500
     except Exception as e: # Catch other potential errors during fetch/initial JSON parse
         tb_str = traceback.format_exc(); print(tb_str)
         error_message = f"An unexpected error occurred during data fetching: {str(e)}"
-        return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 500
+        return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id, plot_json_str=None), 500
 
 
     # --- Data Processing & Plotting (using New Script Logic) ---
@@ -104,7 +106,7 @@ def plot_site():
         if not data["data"]: # Check if the data list is empty
             nodata_message = f"No time series data returned from API for site {site_id} for the requested period."
             # Return 200 OK, but indicate no data
-            return render_template_string(HTML_TEMPLATE, nodata=nodata_message, site_id=site_id), 200
+            return render_template_string(HTML_TEMPLATE, nodata=nodata_message, site_id=site_id, plot_json_str=None), 200
         else:
             # --- Start: Adapted from New Script ---
             df = pd.DataFrame(data["data"], columns=["date", "value"])
@@ -122,167 +124,127 @@ def plot_site():
 
             # Drop rows where essential Date or DISCHARGE is NaN AFTER conversion attempts
             # Keep original index temporarily if needed for merging later, but reset for processing
+            df_original_index = df.index # Keep track if needed, though index merging used later avoids this need here
             df = df.dropna(subset=['Date', 'DISCHARGE']).sort_values(by='Date').reset_index(drop=True)
 
             # Check if DataFrame is empty *after* cleaning
             if df.empty:
                 nodata_message = f"No valid, plottable data points found for site {site_id} after cleaning."
-                return render_template_string(HTML_TEMPLATE, nodata=nodata_message, site_id=site_id), 200
+                return render_template_string(HTML_TEMPLATE, nodata=nodata_message, site_id=site_id, plot_json_str=None), 200
 
 
             # Reorder columns (example, adjust as needed)
             core_cols = ["Date", "DISCHARGE"]
             meta_cols = [col for col in metadata_fields if col in df.columns]
-            df = df[core_cols + meta_cols] # Basic reordering
+            # Ensure flag columns are added later if they exist
+            all_cols = core_cols + meta_cols
+            df = df[all_cols] # Basic reordering initially
 
 
             # === FLAGGING CRITERIA (from New Script) === #
-            # Exclude 0 values when flagging for negative values
             df['FLAG_NEGATIVE'] = (df['DISCHARGE'] < 0) & (df['DISCHARGE'] != 0)
-
-            # Exclude 0 values for "FLAG_ZERO" criteria
             df['FLAG_ZERO'] = (df['DISCHARGE'] == 0)
 
-            # === Filter Out Non-Positive Values for Statistical Tests === #
             df_nonzero = df[df["DISCHARGE"] > 0].copy()
 
+            # Initialize flag columns in the main df to avoid errors if df_nonzero is empty
+            df["RATE_OF_CHANGE"] = np.nan
+            df["OUTLIER_IF"] = False
+            df["FLAG_REPEATED"] = False
+            df["PERCENT_DEV"] = np.nan
+            df["FLAG_RSD"] = False
+            df["FLAG_Discharge"] = False
+            df["FLAG_IQR"] = False
+            df["FLAG_RoC"] = False
+
+            discharge_90th_percentile = np.nan
+            discharge_95th_percentile = np.nan
+            Q1, Q3, IQR = np.nan, np.nan, np.nan
+
             if not df_nonzero.empty:
-                # === Compute IQR Thresholds === #
                 Q1, Q3 = df_nonzero["DISCHARGE"].quantile([0.25, 0.75])
                 IQR = Q3 - Q1
-
-                # === Compute 90th Percentile Thresholds === #
                 discharge_90th_percentile = np.percentile(df_nonzero["DISCHARGE"].dropna(), 90)
-
-                # === Compute the 95th Percentile Thresholds === #
                 discharge_95th_percentile = np.percentile(df_nonzero["DISCHARGE"].dropna(), 95)
 
-                # === Compute Rate of Change and Merge Back === #
-                # Ensure date sorting before diff
                 df_nonzero = df_nonzero.sort_values(by="Date")
                 df_nonzero["RATE_OF_CHANGE"] = df_nonzero["DISCHARGE"].diff().abs()
-                # Merge RoC back to the original df based on index (more robust than date string if dates weren't unique initially)
-                df = df.merge(df_nonzero[["RATE_OF_CHANGE"]], left_index=True, right_index=True, how="left")
+                # Use update to merge back based on index alignment
+                df.update(df_nonzero[["RATE_OF_CHANGE"]])
 
-
-                # === Flag Repeated Values (4 or more in a row) === #
-                # Use the original df for this, considering only non-NaN, non-zero for the *value check* but apply flag to original df index
-                # Create groups based on consecutive identical values *within the non-zero subset*
-                non_zero_mask = df["DISCHARGE"] > 0
+                non_zero_mask = df["DISCHARGE"] > 0 # Recreate mask on original df
                 if non_zero_mask.any():
-                     is_different = (df.loc[non_zero_mask, "DISCHARGE"] != df.loc[non_zero_mask, "DISCHARGE"].shift())
-                     # Calculate group sizes based on consecutive identical values in the non-zero subset
-                     group_sizes = df.loc[non_zero_mask, "DISCHARGE"].groupby(is_different.cumsum()).transform("size")
-                     # Create the flag column in the original DataFrame, defaulting to False
-                     df["FLAG_REPEATED"] = False
-                     # Apply the flag where the group size is >= 4 *on the corresponding rows* in the original df
-                     df.loc[non_zero_mask & (group_sizes >= 4), "FLAG_REPEATED"] = True
-                else:
-                     df["FLAG_REPEATED"] = False # No non-zero values to repeat
+                     # Make sure shift happens on sorted values for correct comparison
+                     df_sorted_nonzero = df.loc[non_zero_mask].sort_values('Date')
+                     is_different = (df_sorted_nonzero["DISCHARGE"] != df_sorted_nonzero["DISCHARGE"].shift())
+                     group_sizes = df_sorted_nonzero["DISCHARGE"].groupby(is_different.cumsum()).transform("size")
+                     # Create a temporary series aligned with df_sorted_nonzero
+                     flag_repeated_temp = group_sizes >= 4
+                     # Update the main df using the index from df_sorted_nonzero
+                     df.loc[df_sorted_nonzero.index, "FLAG_REPEATED"] = flag_repeated_temp
 
-
-                # === Run Isolation Forest for Outlier Detection === #
-                # Ensure DISCHARGE has no NaNs before fitting (already handled by df_nonzero creation)
                 df_iforest = df_nonzero[["DISCHARGE"]].dropna()
-                if not df_iforest.empty and df_iforest['DISCHARGE'].nunique() > 1: # Check for variability
+                if not df_iforest.empty and df_iforest['DISCHARGE'].nunique() > 1:
                     model = IsolationForest(contamination=0.05, random_state=42)
                     # Fit on non-NaN values and assign back using index of df_nonzero
                     df_nonzero["OUTLIER_IF_PREDICT"] = model.fit_predict(df_iforest)
                     df_nonzero["OUTLIER_IF"] = df_nonzero["OUTLIER_IF_PREDICT"] == -1
-                    # Merge back to original df
-                    df = df.merge(df_nonzero[["OUTLIER_IF"]], left_index=True, right_index=True, how="left")
-                    df["OUTLIER_IF"] = df["OUTLIER_IF"].fillna(False).astype(bool) # Fill NA and ensure boolean
-                else:
-                    df["OUTLIER_IF"] = False # Handle case with no data or no variability
+                    # Update the main df using index alignment
+                    df.update(df_nonzero[["OUTLIER_IF"]])
+                    df["OUTLIER_IF"] = df["OUTLIER_IF"].fillna(False).astype(bool)
 
-
-                # === Compute Relative Standard Deviation for Flagging Large Spikes === #
                 mean_discharge = df_nonzero["DISCHARGE"].mean()
-                # Avoid division by zero if mean is zero
                 if mean_discharge != 0:
-                    # Calculate on original df, using the mean from non-zero
                     df["PERCENT_DEV"] = ((df["DISCHARGE"] - mean_discharge).abs() / mean_discharge) * 100
                 else:
-                    df["PERCENT_DEV"] = np.nan # Or set to 0 or another appropriate value
+                    df["PERCENT_DEV"] = np.nan # Already initialized, but good to be explicit
 
-                # === Flag Discharges with Large Relative Deviation === #
-                threshold = 1000 # Over 1000% deviation
-                # Apply flag where calculation was possible and condition met
+                threshold = 1000
                 df["FLAG_RSD"] = (df["PERCENT_DEV"] > threshold) & (df["DISCHARGE"] != 0) & df["PERCENT_DEV"].notna()
-                df["FLAG_RSD"] = df["FLAG_RSD"].fillna(False) # Fill remaining NaNs if any
+                df["FLAG_RSD"] = df["FLAG_RSD"].fillna(False)
 
-                # Note: Merging for IF and Repeated flags already done above.
+                # --- Calculate flags based on thresholds ---
+                if pd.notna(discharge_95th_percentile):
+                    df["FLAG_Discharge"] = (df["DISCHARGE"] > discharge_95th_percentile) & (df["DISCHARGE"] > 0)
 
-            else:
-                # === Fallback Values for Empty or Non-Positive Series === #
-                discharge_90th_percentile = np.nan # Use NaN to indicate it wasn't calculated
-                discharge_95th_percentile = np.nan
-                IQR = np.nan
-                Q1 = Q3 = np.nan
-                df["RATE_OF_CHANGE"] = np.nan
-                df["OUTLIER_IF"] = False
-                df["FLAG_REPEATED"] = False
-                df["PERCENT_DEV"] = np.nan
-                df["FLAG_RSD"] = False
+                if pd.notna(Q1) and pd.notna(Q3) and pd.notna(IQR):
+                    if IQR > 0:
+                        df["FLAG_IQR"] = ((df["DISCHARGE"] < Q1 - 1.5 * IQR) | (df["DISCHARGE"] > Q3 + 1.5 * IQR)) & (df["DISCHARGE"] > 0)
+                    elif IQR == 0: # Handle zero IQR
+                        df["FLAG_IQR"] = (df["DISCHARGE"] != Q1) & (df["DISCHARGE"] > 0)
 
-            # === Flag Values > 95th Percentile Outliers, IQR Outliers Upper and Lower Bound, Flag Values Rate of Change > 90th Percentile Value === #
-            # Ensure thresholds are numeric (not NaN) before comparison
-            if pd.notna(discharge_95th_percentile):
-                 # Apply only to non-zero values
-                df["FLAG_Discharge"] = (df["DISCHARGE"] > discharge_95th_percentile) & (df["DISCHARGE"] > 0)
-            else:
-                df["FLAG_Discharge"] = False
-
-            # Ensure IQR components are numeric (not NaN)
-            if pd.notna(Q1) and pd.notna(Q3) and pd.notna(IQR) and IQR > 0: # Check IQR > 0 to avoid issues
-                 # Apply only to non-zero values
-                df["FLAG_IQR"] = ((df["DISCHARGE"] < Q1 - 1.5 * IQR) | (df["DISCHARGE"] > Q3 + 1.5 * IQR)) & (df["DISCHARGE"] > 0)
-            elif pd.notna(Q1) and IQR == 0: # Handle zero IQR case (all non-zero values are the same)
-                df["FLAG_IQR"] = (df["DISCHARGE"] != Q1) & (df["DISCHARGE"] > 0)
-            else: # Handles NaN IQR or other issues
-                df["FLAG_IQR"] = False
+                if pd.notna(discharge_90th_percentile):
+                    df["FLAG_RoC"] = (df["RATE_OF_CHANGE"] > discharge_90th_percentile) & df["RATE_OF_CHANGE"].notna()
 
 
-            # Ensure RoC threshold is numeric (not NaN)
-            if pd.notna(discharge_90th_percentile):
-                # Apply where RoC is calculated and > threshold
-                df["FLAG_RoC"] = (df["RATE_OF_CHANGE"] > discharge_90th_percentile) & df["RATE_OF_CHANGE"].notna()
-            else:
-                df["FLAG_RoC"] = False
+            # === Ensure all flag columns exist and are boolean === #
+            flag_cols_final = [
+                "FLAG_NEGATIVE", "FLAG_ZERO", "FLAG_REPEATED", "OUTLIER_IF",
+                "FLAG_RSD", "FLAG_Discharge", "FLAG_IQR", "FLAG_RoC"
+            ]
+            for col in flag_cols_final:
+                if col not in df.columns:
+                    df[col] = False # Ensure column exists
+                else:
+                     # Fill NaNs that might have resulted from merges/updates and ensure boolean
+                    df[col] = df[col].fillna(False).astype(bool)
 
-
-            # Fill NaNs potentially introduced by merges or calculations in flag columns before combining
-            flag_cols_to_fill = ["FLAG_NEGATIVE", "FLAG_ZERO", "FLAG_REPEATED", "OUTLIER_IF",
-                                 "FLAG_RSD", "FLAG_Discharge", "FLAG_IQR", "FLAG_RoC"]
-            for col in flag_cols_to_fill:
-                 if col in df.columns:
-                     df[col] = df[col].fillna(False).astype(bool) # Ensure boolean after filling
-                 else:
-                     df[col] = False # Add column if it wasn't created due to edge cases
-
-            # === Above Max (Suspected Above Max)--only show common flagged values among the three methods (IQR, > 95th Percentile, IF) === #
+            # === Combined Flags === #
             df["FLAG_ABOVE_MAX_OVERLAP"] = (
-                df["FLAG_IQR"] &
-                df["FLAG_Discharge"] &
-                df["OUTLIER_IF"]
-            ) & (df["DISCHARGE"] > 0) # Ensure we only flag positive values here
+                df["FLAG_IQR"] & df["FLAG_Discharge"] & df["OUTLIER_IF"]
+            ) & (df["DISCHARGE"] > 0)
 
-            # === Large Spikes --only show common flagged values among the two methods (RSD,RoC) === #
             df["FLAG_LARGE_SPIKES"] = df["FLAG_RSD"] & df["FLAG_RoC"]
 
-
-            # === Overall Flagged Record Indicator === #
-            # Define the specific flags to check for the final "FLAGGED" status
+            # === Overall Flagged Indicator === #
             flags_for_overall = ["FLAG_NEGATIVE", "FLAG_ZERO", "FLAG_REPEATED",
                                  "FLAG_ABOVE_MAX_OVERLAP", "FLAG_LARGE_SPIKES"]
             df["FLAGGED"] = df[flags_for_overall].any(axis=1)
 
-
-            # --- Plotting Setup (from New Script) ---
+            # --- Plotting Setup ---
             plot_title = f"Flagged Data Points for {metadata.get('station_name', 'Station ' + site_id)}"
-            units = metadata.get('units', 'CFS') # Get units for y-axis label
+            units = metadata.get('units', 'CFS')
 
-            # Define custom legend names and colors
             flag_colors = {
                 'FLAG_NEGATIVE': ('red', 'Negative (-)'),
                 'FLAG_ZERO': ('blue', 'Value = 0'),
@@ -291,23 +253,19 @@ def plot_site():
                 'FLAG_LARGE_SPIKES': ('orange', 'Large Spikes'),
             }
 
-            # Create plot
             fig = go.Figure()
 
-            # Background Line (Mean Daily Discharge)
             fig.add_trace(go.Scatter(
                 x=df['Date'], y=df['DISCHARGE'],
                 mode='lines',
                 line=dict(color='lightgray', width=1.5),
                 name='Mean Daily Discharge',
-                connectgaps=False # Do not connect across NaN gaps (already dropped NaNs earlier, but good practice)
+                connectgaps=False
             ))
 
-            # Add flagged points
             any_flags_plotted = False
             for flag, (color, legend_name) in flag_colors.items():
-                 # Explicitly cast to bool after fillna
-                 subset = df[df[flag].fillna(False).astype(bool)]
+                 subset = df[df[flag]] # Already boolean
                  if not subset.empty:
                      any_flags_plotted = True
                      fig.add_trace(go.Scatter(
@@ -317,13 +275,10 @@ def plot_site():
                          name=legend_name
                      ))
 
-            # Add horizontal dashed line for min value of Above Max
-            # Ensure flag column exists before filtering
             if "FLAG_ABOVE_MAX_OVERLAP" in df.columns:
-                above_max_subset = df[df["FLAG_ABOVE_MAX_OVERLAP"].fillna(False).astype(bool)]
+                above_max_subset = df[df["FLAG_ABOVE_MAX_OVERLAP"]]
                 if not above_max_subset.empty:
                     min_above_max = above_max_subset["DISCHARGE"].min()
-                    # Check if min_above_max is finite before plotting
                     if pd.notna(min_above_max) and np.isfinite(min_above_max):
                         fig.add_trace(go.Scatter(
                             x=[df["Date"].min(), df["Date"].max()],
@@ -333,72 +288,43 @@ def plot_site():
                             name="Min Value (Above Suspected Max)"
                         ))
 
-
-            # Update layout with title and legend placement (from New Script)
             fig.update_layout(
-                title=dict(
-                    text=plot_title,
-                    x=0.5,  # Centers the title
-                    font=dict(size=20)
-                ),
-                xaxis=dict(
-                    title="Date",
-                    title_font=dict(size=18),
-                    tickfont=dict(size=14)
-                    # Removed custom tick logic from old script for simplicity
-                ),
-                yaxis=dict(
-                    title=f"Mean Daily Discharge ({units})", # Use units from metadata
-                    title_font=dict(size=18),
-                    tickfont=dict(size=14)
-                    # Removed fixed y-range from old script, let Plotly auto-scale
-                ),
+                title=dict(text=plot_title, x=0.5, font=dict(size=20)),
+                xaxis=dict(title="Date", title_font=dict(size=18), tickfont=dict(size=14)),
+                yaxis=dict(title=f"Mean Daily Discharge ({units})", title_font=dict(size=18), tickfont=dict(size=14)),
                 legend=dict(
-                    orientation="h",  # Horizontal legend
-                    yanchor="top",
-                    y=-0.15,  # Adjusted position slightly below plot
-                    xanchor="center",
-                    x=0.5,
-                    title=dict(text="Flagging Criteria:", font=dict(size=16)),
-                    font=dict(size=14)
+                    orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5,
+                    title=dict(text="Flagging Criteria:", font=dict(size=16)), font=dict(size=14)
                 ),
                 template="plotly_white",
-                width=1400, # Adjust width as needed
-                height=700, # Adjust height as needed
-                margin=dict(t=80, b=120) # Adjust margins (bottom increased for legend)
+                width=1400, height=700,
+                margin=dict(t=80, b=120)
             )
 
-            # Add warning if no flags were triggered to plot
             if not any_flags_plotted and not nodata_message:
-                warning_message = f"Data processed successfully for site {site_id}, but no data points met the flagging criteria."
+                warning_message = f"Data processed successfully for site {site_id}, but no data points met the specific flagging criteria being plotted."
 
-            # --- End: Adapted from New Script ---
-
-            # Convert figure to JSON string for embedding in HTML
-            # Use plotly's json encoder for robustness with numpy types etc.
-            plot_json_str = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+            # --- Convert figure to JSON string ---
+            plot_json_str = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder) # Use the imported util
 
 
     except Exception as e:
-        # Catch errors during the processing/plotting phase
         tb_str = traceback.format_exc(); print(tb_str)
         error_message = f"An error occurred during data processing or plot generation: {str(e)}"
-        # Return 500 Internal Server Error
-        return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id), 500
+        # Pass None for plot_json_str when rendering error template
+        return render_template_string(HTML_TEMPLATE, error=error_message, site_id=site_id, plot_json_str=None), 500
 
 
     # --- Rendering ---
-    # Pass the JSON string to the template
+    # Pass the JSON string (or None if error/nodata) to the template
     return render_template_string(HTML_TEMPLATE, plot_json_str=plot_json_str, site_id=site_id, error=error_message, warning=warning_message, nodata=nodata_message)
 
 
 # --- Main execution block ---
 if __name__ == '__main__':
     print("Starting Flask development server...")
-    # Use 0.0.0.0 to make it accessible on the network, default is 127.0.0.1
     host = os.environ.get("FLASK_HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 8080))
     print(f"Access the plot via http://{host}:{port}/plot?id=YOUR_SITE_ID (e.g., http://localhost:{port}/plot?id=10987)")
-    # Set debug=False for production, True for development (enables auto-reload)
     debug_mode = os.environ.get("FLASK_DEBUG", "True").lower() == "true"
     app.run(debug=debug_mode, host=host, port=port)
