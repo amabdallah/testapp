@@ -34,34 +34,18 @@ def validate_date(date_str):
 def interpolate_color(color1_rgba: Tuple[int, int, int, float],
                       color2_rgba: Tuple[int, int, int, float],
                       fraction: float) -> str:
-    """
-    Interpolates between two RGBA colors represented as tuples (r, g, b, a).
-
-    Args:
-        color1_rgba: The starting RGBA tuple (fraction = 0).
-        color2_rgba: The ending RGBA tuple (fraction = 1).
-        fraction: The interpolation factor (clamped between 0 and 1).
-
-    Returns:
-        An rgba string 'rgba(r,g,b,a)' for Plotly.
-    """
+    """ Interpolates between two RGBA colors. """
     r1, g1, b1, a1 = color1_rgba
     r2, g2, b2, a2 = color2_rgba
-
-    # Ensure fraction is clamped between 0 and 1
     fraction = max(0.0, min(1.0, fraction))
-
     r = int(r1 + (r2 - r1) * fraction)
     g = int(g1 + (g2 - g1) * fraction)
     b = int(b1 + (b2 - b1) * fraction)
     a = a1 + (a2 - a1) * fraction
-
-    # Ensure rgb values are within valid range 0-255
     r = max(0, min(255, r))
     g = max(0, min(255, g))
     b = max(0, min(255, b))
-
-    return f'rgba({r},{g},{b},{a:.4f})' # Format alpha with precision
+    return f'rgba({r},{g},{b},{a:.4f})'
 
 # --- Function to add gradient buffer bands ---
 def add_gradient_buffer(fig: go.Figure,
@@ -71,57 +55,39 @@ def add_gradient_buffer(fig: go.Figure,
                         start_color_rgba: Tuple[int, int, int, float],
                         end_color_rgba: Tuple[int, int, int, float],
                         num_bands: int = 15):
-    """
-    Adds gradient buffer bands around a central line to a Plotly figure.
-
-    Args:
-        fig: The plotly.graph_objects.Figure to add traces to.
-        dates: Sequence of x-axis values (e.g., list or pd.Index).
-        mean_value: The y-value of the central line.
-        buffer: The half-width of the buffer (total buffer is mean +/- buffer).
-        start_color_rgba: RGBA tuple for the color closest to the mean.
-        end_color_rgba: RGBA tuple for the color at the buffer edges (most transparent).
-        num_bands: Number of bands per side to approximate the gradient.
-    """
-    if buffer <= 0 or num_bands <= 0: # Add check for valid buffer/bands
+    """ Adds gradient buffer bands around a central line. """
+    if buffer <= 0 or num_bands <= 0:
         app.logger.warning("Buffer width or number of bands is non-positive, skipping gradient.")
         return
-
     n_points = len(dates)
-    if n_points < 2: # Need at least two points to draw a polygon
+    if n_points < 2:
          app.logger.warning("Not enough date points to draw gradient buffer.")
          return
-
-    x_coords_polygon = list(dates) + list(dates)[::-1] # Precompute polygon x-coords
-
+    x_coords_polygon = list(dates) + list(dates)[::-1]
     for i in range(num_bands - 1, -1, -1):
         outer_fraction = (i + 1) / num_bands
         inner_fraction = i / num_bands
         band_color = interpolate_color(start_color_rgba, end_color_rgba, outer_fraction)
-
-        # --- Upper Band ---
+        # Upper Band
         band_lower_y_upper = mean_value + inner_fraction * buffer
         band_upper_y_upper = mean_value + outer_fraction * buffer
         if not (np.isfinite(band_lower_y_upper) and np.isfinite(band_upper_y_upper)): continue
-
         y_coords_upper = [band_lower_y_upper] * n_points + [band_upper_y_upper] * n_points
         fig.add_trace(go.Scatter(
             x=x_coords_polygon, y=y_coords_upper, fill='toself', fillcolor=band_color,
             line=dict(color='rgba(0,0,0,0)', width=0), hoverinfo="skip", showlegend=False,
         ))
-
-        # --- Lower Band ---
+        # Lower Band
         band_upper_y_lower = mean_value - inner_fraction * buffer
         band_lower_y_lower = mean_value - outer_fraction * buffer
         if not (np.isfinite(band_upper_y_lower) and np.isfinite(band_lower_y_lower)): continue
-
         y_coords_lower = [band_lower_y_lower] * n_points + [band_upper_y_lower] * n_points
         fig.add_trace(go.Scatter(
             x=x_coords_polygon, y=y_coords_lower, fill='toself', fillcolor=band_color,
             line=dict(color='rgba(0,0,0,0)', width=0), hoverinfo="skip", showlegend=False,
         ))
 
-# --- HTML Template (remains the same) ---
+# --- HTML Template (Adding Units to Header) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -130,15 +96,15 @@ HTML_TEMPLATE = """
     <title>{{ station_name | default('Data Quality Analysis', true) }} (Site ID {{ site_id | default('N/A', true) }}) {{ start_date }} to {{ end_date }}</title>
     <style>
         /* --- CSS --- */
-        body { font-family: sans-serif; margin: 20px; }
+        body { font-family: sans-serif; margin: 40px; }
         h1 { text-align: center; margin-block-start: 0.67em; margin-block-end: 0.67em; line-height: 1.3; }
         .error { color: red; text-align: center; font-weight: bold; margin-top: 15px; }
         #plot_container { margin-top: 20px; min-height: 100px; background-color: #f0f0f0; }
         .controls { text-align: center; margin-bottom: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; }
         .controls label, .controls input, .controls button { margin: 0 5px; vertical-align: middle; }
         .controls input[type="submit"], .controls button { padding: 5px 15px; cursor: pointer; font-size: 1em; }
-        .plot-title-info { text-align: center; font-size: 16px; margin-bottom: 10px; }
-        .header-link { font-size: 14px; color: darkblue; text-decoration: none; }
+        .plot-title-info { text-align: center; font-size: 30px; margin-bottom: 10px; }
+        .header-link { font-size: 30px; color: darkblue; text-decoration: none; }
         .header-link:hover { text-decoration: underline; }
         .header-text-no-link { font-size: 14px; color: darkblue; }
         .modal { display: none; position: fixed; z-index: 1000; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 300px; max-width: 90%; padding: 20px; background-color: #fefefe; border: 3px solid red; box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2); border-radius: 5px; text-align: center; }
@@ -155,15 +121,17 @@ HTML_TEMPLATE = """
 <body>
     <h1>
         <span style="font-size: 18px;">Data Quality Analysis for Measurement Site</span><br>
+        {# **** MODIFICATION: Add units before station name **** #}
         {% if site_id and site_id != 'N/A' and site_id is not none %}
             <a href="https://waterrights.utah.gov/cgi-bin/dvrtview.exe?Modinfo=StationView&STATION_ID={{ site_id }}" target="_blank" rel="noopener noreferrer" class="header-link">
-                {{ station_name | default('Unknown Station', true) }} (Site ID={{ site_id }})
+                {% if units and units != 'Unknown Units' %}{{ units }} - {% endif %}{{ station_name | default('Unknown Station', true) }} (Site ID={{ site_id }})
             </a>
         {% else %}
             <span class="header-text-no-link">
-                {{ station_name | default('Unknown Station', true) }} (Site ID={{ site_id | default('N/A', true) }})
+                 {% if units and units != 'Unknown Units' %}{{ units }} - {% endif %}{{ station_name | default('Unknown Station', true) }} (Site ID={{ site_id | default('N/A', true) }})
             </span>
         {% endif %}
+        {# **** END MODIFICATION **** #}
     </h1>
     <div class="controls">
         <form method="GET" action="/plot">
@@ -303,9 +271,9 @@ HTML_TEMPLATE = """
                               var pIndex = pointData.pointNumber;
                               var pX = pointData.x; var pY = pointData.y;
                               var pTraceName = pointData.fullData ? pointData.fullData.name : 'Unknown Trace';
-                              var displayX = pX; // Assuming X is already a string date
+                              var displayX = pX;
                               var displayY = typeof pY === 'number' ? pY.toFixed(2) : String(pY);
-                              var flagType = String(pTraceName).split('[')[0].trim(); // Extract flag type from trace name
+                              var flagType = String(pTraceName).split('[')[0].trim();
 
                               modalPointInfo.innerHTML = `<b>Date:</b> ${displayX}<br><b>Value:</b> ${displayY}<br><b>Flag:</b> ${flagType}`;
                               modalActionsDiv.innerHTML = ''; // Clear previous buttons
@@ -329,7 +297,7 @@ HTML_TEMPLATE = """
                               // ---- APPEND BUTTONS ----
                               modalActionsDiv.appendChild(btnApprove);
                               modalActionsDiv.appendChild(btnInterpolate);
-                              modalActionsDiv.appendChild(btnDeleteManual); // Add the new button
+                              modalActionsDiv.appendChild(btnDeleteManual);
 
                               modal.style.display = 'block'; // Show the modal
                               console.log("[plotly_click] Modal displayed with point info and actions.");
@@ -374,14 +342,14 @@ HTML_TEMPLATE = """
 # **** END OF HTML TEMPLATE VARIABLE ****
 
 
-# --- Core Data Processing and Plotting Function (Applying gradient buffer & font size changes)---
+# --- Core Data Processing and Plotting Function (Zero line changes, return units) ---
 def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_requested, is_reset=False):
-    # (Initial setup and data fetching logic remains the same)
     station_name = None
     actual_start_date_str = start_date_str_requested
     actual_end_date_str = end_date_str_requested
     df = pd.DataFrame()
     metadata = {}
+    units = 'Unknown Units' # Default units if not found
 
     app.logger.info(f"Generating plot - Input: Site ID: {site_id}, Start Req: {start_date_str_requested}, End Req: {end_date_str_requested}, Reset Flag: {is_reset}")
 
@@ -403,7 +371,8 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         if response.status_code != 200:
             err_msg = f"API Error (Status {response.status_code}) for site {site_id}"
             app.logger.error(err_msg + f" URL: {api_url}")
-            return None, err_msg, None, start_date_str_requested, end_date_str_requested
+            # **** Return default units on error ****
+            return None, err_msg, None, start_date_str_requested, end_date_str_requested, units
 
         try:
             data = response.json()
@@ -412,36 +381,42 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
             snippet = response.text[:200] if hasattr(response, 'text') else '(No text)'
             err_msg = f"JSON Decode Error for site {site_id}. Error: {json_err}. Snippet: {snippet}..."
             app.logger.error(err_msg + f" URL: {api_url}")
-            return None, err_msg, None, start_date_str_requested, end_date_str_requested
+            return None, err_msg, None, start_date_str_requested, end_date_str_requested, units
 
         metadata_fields = ["station_id", "station_name", "system_name", "units"]
         metadata = {f: data.get(f, "N/A") for f in metadata_fields}
         station_name = metadata.get('station_name', 'N/A')
-        units = metadata.get('units', 'CFS')
+        units = metadata.get('units')
+        if not units or units == 'N/A':
+            units = 'Unknown Units'
+            app.logger.warning(f"Units missing from API metadata for site {site_id}. Using '{units}'.")
+        else:
+            app.logger.info(f"Units found in metadata: {units}")
+
 
         if "data" not in data or not isinstance(data["data"], list) or not data["data"]:
             err_msg = f"No 'data' array found or empty in API response for site {site_id}. Station: {station_name}"
             app.logger.warning(err_msg + f" URL: {api_url}")
-            return None, err_msg, station_name, start_date_str_requested, end_date_str_requested
+            return None, err_msg, station_name, start_date_str_requested, end_date_str_requested, units
 
         try:
             df = pd.DataFrame(data["data"], columns=["date", "value"])
         except Exception as df_err:
             err_msg = f"DataFrame creation error for site {site_id}. Error: {df_err}"
             app.logger.error(err_msg, exc_info=True)
-            return None, err_msg, station_name, start_date_str_requested, end_date_str_requested
+            return None, err_msg, station_name, start_date_str_requested, end_date_str_requested, units
 
         if df.empty:
             err_msg = f"DataFrame created but is empty for site {site_id}. Station: {station_name}"
             app.logger.warning(err_msg + f" URL: {api_url}")
-            return None, err_msg, station_name, start_date_str_requested, end_date_str_requested
+            return None, err_msg, station_name, start_date_str_requested, end_date_str_requested, units
 
         if "date" in df.columns and "value" in df.columns:
              df.rename(columns={"date": "Date", "value": "DISCHARGE"}, inplace=True)
         else:
              err_msg = f"Critical error: API response structure changed - missing 'date' or 'value' column for site {site_id}."
              app.logger.error(err_msg + f" Actual Columns: {df.columns.tolist()}")
-             return None, err_msg, station_name, start_date_str_requested, end_date_str_requested
+             return None, err_msg, station_name, start_date_str_requested, end_date_str_requested, units
 
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df.dropna(subset=['Date'], inplace=True)
@@ -450,7 +425,7 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         if df.empty:
             err_msg = f"No valid dates found after conversion for site {site_id}."
             app.logger.warning(err_msg)
-            return None, err_msg, station_name, start_date_str_requested, end_date_str_requested
+            return None, err_msg, station_name, start_date_str_requested, end_date_str_requested, units
 
         min_data_dt = df['Date'].min(); max_data_dt = df['Date'].max()
         app.logger.info(f"Full data range available: {min_data_dt:%Y-%m-%d} to {max_data_dt:%Y-%m-%d}")
@@ -481,7 +456,7 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         if df_filtered.empty:
             err_msg = f"No data available after filtering for site {site_id} in range [{actual_start_date_str} to {actual_end_date_str}]."
             app.logger.warning(err_msg)
-            return None, err_msg, station_name, actual_start_date_str, actual_end_date_str
+            return None, err_msg, station_name, actual_start_date_str, actual_end_date_str, units
 
         df = df_filtered
         df['DISCHARGE'] = pd.to_numeric(df['DISCHARGE'], errors='coerce')
@@ -552,11 +527,11 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
 
         fig.add_trace(go.Scatter(
             x=df['Date'], y=df['DISCHARGE'], mode='lines',
-            line=dict(color='lightgray', width=1.5), name='Mean Daily Discharge',
+            line=dict(color='lightgray', width=1.5), name='Value',
             connectgaps=False, hoverinfo='skip'
         ))
 
-        hover_tmpl = f'<b>Date:</b> %{{x|%Y-%m-%d}}<br><b>Discharge:</b> %{{y:.2f}} {units}<br><b>Flag Type:</b> %{{fullData.name}}<extra></extra>'
+        hover_tmpl = f'<b>Date:</b> %{{x|%Y-%m-%d}}<br><b>Value:</b> %{{y:.2f}} {units}<br><b>Flag Type:</b> %{{fullData.name}}<extra></extra>'
         flags_cfg = {
             'FLAG_NEGATIVE': ('red', 'Below Capacity (-)'),
             'FLAG_ZERO': ('blue', 'Value = 0'),
@@ -565,13 +540,12 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
             'FLAG_LARGE_SPIKES': ('orange', 'Large Spikes')
         }
 
-        # Add Gradient Buffer for Est. Max Capacity
-        min_over_capacity_value = np.nan # Initialize
+        min_over_capacity_value = np.nan
         max_mask = df['FLAG_ABOVE_MAX_OVERLAP']
         if max_mask.any():
             min_over_capacity_value = pd.to_numeric(df.loc[max_mask, "DISCHARGE"], errors='coerce').min()
             if pd.notna(min_over_capacity_value) and np.isfinite(min_over_capacity_value) and min_over_capacity_value > 0:
-                buffer_percentage = 0.10
+                buffer_percentage = 0.10 # Using 10% buffer
                 buffer_value = buffer_percentage * min_over_capacity_value
                 gradient_start_rgba = (128, 0, 128, 0.25)
                 gradient_end_rgba = (255, 255, 255, 0.0)
@@ -597,16 +571,14 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
                 ))
             else:
                 app.logger.warning(f"Could not determine valid min_over_capacity_value for site {site_id}. Skipping buffer/line.")
-                min_over_capacity_value = np.nan # Ensure it's NaN if invalid
+                min_over_capacity_value = np.nan
 
 
-        # Add Flagged point markers
         for flag, (color, legend) in flags_cfg.items():
             if flag in df.columns and df[flag].any():
                 subset = df.loc[df[flag]]
                 count = len(subset)
                 show_flag_legend = True
-                # Hide individual over-capacity points legend if combined buffer legend exists
                 if flag == 'FLAG_ABOVE_MAX_OVERLAP' and pd.notna(min_over_capacity_value):
                     show_flag_legend = False
 
@@ -617,59 +589,55 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
                     showlegend=show_flag_legend
                 ))
 
-        # **** UPDATE LAYOUT WITH FONT SIZES ****
+        # Update layout
         fig.update_layout(
             title=dict(
-                text=plot_title,
-                x=0.5,
-                y=0.95,
-                font_size=28  # Doubled title font size (approx)
+                text=plot_title, x=0.5, y=0.95, font_size=28
             ),
             xaxis=dict(
-                title_text="Date",
-                title_font_size=24, # Doubled axis title font size
-                tickfont_size=18    # Increased tick font size
+                title_text="Date", title_font_size=24, tickfont_size=18,
+                # **** MODIFICATION: Hide main line, show bold zero line ****
+                showline=False, # Hide the main axis line
+                zeroline=True, zerolinewidth=2, zerolinecolor='black' # Show bold black zero line
             ),
             yaxis=dict(
-                title_text=f"Mean Daily Discharge ({units})",
-                title_font_size=24, # Doubled axis title font size
-                tickfont_size=18    # Increased tick font size
+                title_text=f"{units}", title_font_size=24, tickfont_size=18,
+                 # **** MODIFICATION: Hide main line, show bold zero line ****
+                showline=False, # Hide the main axis line
+                zeroline=True, zerolinewidth=2, zerolinecolor='black' # Show bold black zero line
             ),
             legend=dict(
-                title_text="Legend",
-                title_font_size=22, # Increased legend title font size
-                font_size=18,       # Increased legend item font size
-                x=1.02,
-                y=1,
-                xanchor="left",
-                yanchor="top"
+                title_text="Legend", title_font_size=22, font_size=25,
+                x=1.02, y=1, xanchor="left", yanchor="top"
             ),
             template="plotly_white",
-            margin=dict(t=80, r=250, b=80, l=80), # Keep margins
-            height=700,                         # Keep height
+            margin=dict(t=80, r=250, b=80, l=80),
+            height=700,
             hovermode='closest'
         )
-        # **** END FONT SIZE UPDATES ****
-
 
         app.logger.info(f"Plot generated successfully for {site_id} [{actual_start_date_str} to {actual_end_date_str}]")
-        return fig, None, station_name, actual_start_date_str, actual_end_date_str
+        # **** MODIFICATION: Return units ****
+        return fig, None, station_name, actual_start_date_str, actual_end_date_str, units
 
     except requests.exceptions.RequestException as e:
         err = f"Network error fetching data: {e}"
         app.logger.error(f"API Request failed for site {site_id}: {e}", exc_info=True)
         name = metadata.get('station_name', 'N/A') if 'metadata' in locals() else None
-        return None, err, name, start_date_str_requested, end_date_str_requested
+        # **** Return default units on error ****
+        return None, err, name, start_date_str_requested, end_date_str_requested, units
     except Exception as e:
         err = f"Unexpected error during plot generation process."
         name = metadata.get('station_name', 'N/A') if 'metadata' in locals() else None
         app.logger.error(f"Plot generation internal error for site {site_id}: {e}", exc_info=True)
         final_start = actual_start_date_str if 'actual_start_date_str' in locals() else start_date_str_requested
         final_end = actual_end_date_str if 'actual_end_date_str' in locals() else end_date_str_requested
-        return None, err, name, final_start, final_end
+        # **** Return determined or default units on error ****
+        final_units = units if 'units' in locals() and units != 'Unknown Units' else 'Unknown Units'
+        return None, err, name, final_start, final_end, final_units
 
 
-# --- Flask Route: /plot (remains the same) ---
+# --- Flask Route: /plot (Handling units return value) ---
 @app.route('/plot')
 def show_plot():
     """
@@ -687,7 +655,8 @@ def show_plot():
         app.logger.info("No Site ID provided. Rendering initial form.")
         today = datetime.now(); one_yr_ago = today - timedelta(days=365)
         def_start = one_yr_ago.strftime('%Y-%m-%d'); def_end = today.strftime('%Y-%m-%d')
-        return render_template_string(HTML_TEMPLATE, site_id=None, station_name="Data Quality Analysis", start_date=def_start, end_date=def_end, error=None, plot_div=None)
+        # **** Pass default units to index render ****
+        return render_template_string(HTML_TEMPLATE, site_id=None, station_name="Data Quality Analysis", start_date=def_start, end_date=def_end, error=None, plot_div=None, units='Unknown Units')
 
     if not site_id.strip():
         app.logger.warning("Empty Site ID provided.")
@@ -696,7 +665,8 @@ def show_plot():
         def_start = one_yr_ago.strftime('%Y-%m-%d'); def_end = today.strftime('%Y-%m-%d')
         start_render = start_date_req if start_date_req else def_start
         end_render = end_date_req if end_date_req else def_end
-        return render_template_string(HTML_TEMPLATE, site_id=site_id, station_name="Data Quality Analysis", start_date=start_render, end_date=end_render, error=err_msg, plot_div=None), 400
+        # **** Pass default units to error render ****
+        return render_template_string(HTML_TEMPLATE, site_id=site_id, station_name="Data Quality Analysis", start_date=start_render, end_date=end_render, error=err_msg, plot_div=None, units='Unknown Units'), 400
 
     if not is_reset and not start_date_req and not end_date_req:
         today_str = datetime.now().strftime('%Y-%m-%d')
@@ -709,6 +679,7 @@ def show_plot():
     st_name = "Data Quality Analysis"; status = 200
     start_proc = None; end_proc = None
     start_render = start_date_req; end_render = end_date_req
+    units_val = 'Unknown Units' # Initialize units for template context
 
     if not is_reset:
         start_dt = validate_date(start_date_req)
@@ -730,7 +701,8 @@ def show_plot():
     if not err_msg:
         app.logger.info(f"Calling generate_plot_for_site: id={site_id}, start={start_proc}, end={end_proc}, is_reset={is_reset}")
         try:
-            fig, err_func, name_func, final_start, final_end = \
+            # **** MODIFICATION: Unpack units value ****
+            fig, err_func, name_func, final_start, final_end, units_val = \
                 generate_plot_for_site(site_id, start_proc, end_proc, is_reset=is_reset)
 
             if name_func and name_func != 'N/A': st_name = name_func
@@ -745,13 +717,14 @@ def show_plot():
 
             start_render = final_start
             end_render = final_end
-            app.logger.info(f"Processing complete. Render dates (actual range used) set to: Start={start_render}, End={end_render}")
+            app.logger.info(f"Processing complete. Render dates (actual range used) set to: Start={start_render}, End={end_render}, Units: {units_val}")
 
         except Exception as e:
             app.logger.error(f"Unhandled exception during plot generation: {e}", exc_info=True)
             err_msg = "Unexpected server error during plot generation."; status = 500
             start_render = final_start if 'final_start' in locals() and final_start else (start_date_req or "")
             end_render = final_end if 'final_end' in locals() and final_end else (end_date_req or "")
+            # units_val remains 'Unknown Units' (its initial value)
 
     if fig:
         try:
@@ -771,13 +744,14 @@ def show_plot():
     start_final = start_render if start_render is not None else ""
     end_final = end_render if end_render is not None else ""
 
+    # **** MODIFICATION: Pass units to template ****
     return render_template_string(HTML_TEMPLATE,
                                   site_id=site_id, station_name=st_name,
                                   start_date=start_final, end_date=end_final,
-                                  error=err_msg, plot_div=plot_div), status
+                                  error=err_msg, plot_div=plot_div, units=units_val), status
 
 
-# --- Flask Route: / (Index - remains the same) ---
+# --- Flask Route: / (Index - remains the same, units passed in show_plot) ---
 @app.route('/')
 def index():
     """ Renders the initial form page with default dates (last year). """
@@ -785,10 +759,11 @@ def index():
     today_str = today_dt.strftime('%Y-%m-%d')
     one_year_ago_str = (today_dt - timedelta(days=365)).strftime('%Y-%m-%d')
     app.logger.info("Rendering index page with default date range (last year).")
+    # Pass default units here too for consistency
     return render_template_string(HTML_TEMPLATE,
                                   site_id=None, station_name="Data Quality Analysis",
                                   start_date=one_year_ago_str, end_date=today_str,
-                                  error=None, plot_div=None)
+                                  error=None, plot_div=None, units='Unknown Units')
 
 # --- Run the App (remains the same) ---
 if __name__ == '__main__':
