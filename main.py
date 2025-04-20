@@ -25,7 +25,7 @@ app.logger.setLevel(logging.INFO)
 REQUIRED_THRESHOLD_COLS = ["Over_Capacity", "Unusual_Spike"] # Corrected spelling
 STATIC_MIN_THRESHOLD = 0
 BUFFER_PERCENTAGE = 0.10 # Define buffer width as 10% of max capacity
-BUFFER_NUM_BANDS = 15 # Number of bands for the gradient buffer
+BUFFER_NUM_BANDS = 8 # Number of bands for the gradient buffer
 BUFFER_START_COLOR_RGBA = (128, 0, 128, 0.2) # Semi-transparent purple near the line
 BUFFER_END_COLOR_RGBA = (128, 0, 128, 0.0)   # Fully transparent purple at the edge
 
@@ -108,7 +108,7 @@ def load_thresholds(file_path) -> Optional[pd.DataFrame]: # file_path can be str
 load_thresholds(THRESHOLDS_CSV_PATH)
 
 
-# --- Helper Functions (Unchanged from previous version, except for added buffer functions below) ---
+# --- Helper Functions ---
 
 def get_site_thresholds(thresholds_df: pd.DataFrame, site_id: str) -> Optional[Dict[str, float]]:
     """Gets and validates thresholds for a specific site."""
@@ -172,7 +172,7 @@ def apply_flagging(df: pd.DataFrame, thresholds: Dict[str, float]) -> pd.DataFra
         # Ensure expected columns exist even if flagging fails
         df['FLAGGED'] = False
         flag_cols_expected = ['FLAG_LESS_THAN_Min._Value', 'FLAG_ZERO', 'FLAG_REPEATED',
-                              'FLAG_GREATER_THAN_MaxValue', 'UNUSUAL_SPIKE', 'FLAG_BELOW_CAPACITY']
+                               'FLAG_GREATER_THAN_MaxValue', 'UNUSUAL_SPIKE', 'FLAG_BELOW_CAPACITY']
         for col in flag_cols_expected:
             if col not in df.columns: df[col] = False
         return df
@@ -325,7 +325,7 @@ def add_gradient_buffer(fig: go.Figure,
             mode='lines' # mode='lines' needed for fill='toself' to work correctly
         ))
 
-# --- HTML Template (Unchanged) ---
+# --- HTML Template ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -347,7 +347,7 @@ HTML_TEMPLATE = """
 </html>"""
 
 
-# --- Core Data Processing and Plotting Function (MODIFIED TO INCLUDE BUFFER) ---
+# --- Core Data Processing and Plotting Function (MODIFIED TO INCLUDE STATS BOX) ---
 def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_requested, is_reset=False):
     """Fetches data, applies flags, and generates the Plotly figure for a given site."""
     station_name = None
@@ -376,8 +376,8 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         app.logger.error(err_msg) # Already logged in get_site_thresholds, but good to log here too
         return None, err_msg, "Data Quality Analysis", start_date_str_requested, end_date_str_requested, units
 
+
     # --- 2. Fetch Data from API ---
-    # Determine API call dates (use full range if reset or invalid dates given)
     api_end_date_call = datetime.now().strftime('%Y-%m-%d')
     if not is_reset and validate_date(end_date_str_requested):
         api_end_date_call = end_date_str_requested
@@ -400,7 +400,6 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         if response.status_code != 200:
             err_msg = f"API Error (Status {response.status_code}) for site {site_id}"
             app.logger.error(err_msg + f". URL: {api_url}. Response: {response.text[:200]}...")
-            # Try to get station name even on error if possible
             name_from_thresh = thresholds_df_global.loc[thresholds_df_global['SiteID_str'] == site_id, 'station_name'].iloc[0] if 'station_name' in thresholds_df_global.columns and not thresholds_df_global[thresholds_df_global['SiteID_str'] == site_id].empty else 'N/A'
             return None, err_msg, name_from_thresh, start_date_str_requested, end_date_str_requested, units
 
@@ -408,7 +407,7 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         try:
             data = response.json()
             if not isinstance(data, dict):
-                 raise ValueError("API response was not a JSON object (dictionary).")
+                    raise ValueError("API response was not a JSON object (dictionary).")
         except (requests.exceptions.JSONDecodeError, ValueError) as json_err:
             snippet = response.text[:200] if hasattr(response, 'text') else '(No text)'
             err_msg = f"JSON Decode Error for site {site_id}. Error: {json_err}. Response snippet: {snippet}..."
@@ -432,7 +431,6 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         if "data" not in data or not isinstance(data["data"], list) or not data["data"]:
             err_msg = f"No 'data' array found or empty in API response for site {site_id}. Station: {station_name}"
             app.logger.warning(err_msg + f" URL: {api_url}")
-            # Return successfully processed metadata even if no data points
             return None, err_msg, station_name, start_date_str_requested, end_date_str_requested, units
 
         # Create DataFrame
@@ -441,7 +439,6 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         except Exception as df_err:
             err_msg = f"DataFrame creation error for site {site_id} from API data structure. Error: {df_err}"
             app.logger.error(err_msg, exc_info=True)
-            # Log the first few data items to see structure
             app.logger.error(f"First few items in data['data']: {data.get('data', [])[:3]}")
             return None, err_msg, station_name, start_date_str_requested, end_date_str_requested, units
 
@@ -454,7 +451,6 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
         if "date" in df.columns and "value" in df.columns:
             df.rename(columns={"date": "Date", "value": "DISCHARGE"}, inplace=True)
         else:
-            # This case should be caught by the column naming above, but as a failsafe:
             err_msg = f"Critical error: DataFrame created but columns 'date' or 'value' are missing. Site {site_id}."
             app.logger.error(err_msg + f" Actual Columns Found: {df.columns.tolist()}")
             return None, err_msg, station_name, start_date_str_requested, end_date_str_requested, units
@@ -481,204 +477,206 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
             end_dt_final = max_data_dt
             app.logger.info(f"Reset requested. Using full data range for plot: {start_dt_final:%Y-%m-%d} to {end_dt_final:%Y-%m-%d}")
         else:
-            # Use requested dates if valid, otherwise clamp to available data range
             start_req_dt = validate_date(start_date_str_requested)
             end_req_dt = validate_date(end_date_str_requested)
-
-            # Default to available range if requested dates are invalid
             if not start_req_dt: start_req_dt = min_data_dt
             if not end_req_dt: end_req_dt = max_data_dt
-
-            # Clamp the valid/defaulted requested dates to the actual data range
             start_dt_final = max(start_req_dt, min_data_dt)
             end_dt_final = min(end_req_dt, max_data_dt)
-
-            # Handle case where requested range is entirely outside data range
             if start_dt_final > end_dt_final:
-                 app.logger.warning(f"Requested range [{start_req_dt:%Y-%m-%d} - {end_req_dt:%Y-%m-%d}] "
-                                    f"is outside or incompatible with available data range [{min_data_dt:%Y-%m-%d} - {max_data_dt:%Y-%m-%d}]. "
-                                    f"Plotting full available range instead.")
-                 start_dt_final = min_data_dt
-                 end_dt_final = max_data_dt
+                app.logger.warning(f"Requested range [{start_req_dt:%Y-%m-%d} - {end_req_dt:%Y-%m-%d}] "
+                                     f"is outside or incompatible with available data range [{min_data_dt:%Y-%m-%d} - {max_data_dt:%Y-%m-%d}]. "
+                                     f"Plotting full available range instead.")
+                start_dt_final = min_data_dt
+                end_dt_final = max_data_dt
             else:
-                 app.logger.info(f"Using date range for plot: {start_dt_final:%Y-%m-%d} to {end_dt_final:%Y-%m-%d}")
+                app.logger.info(f"Using date range for plot: {start_dt_final:%Y-%m-%d} to {end_dt_final:%Y-%m-%d}")
 
-        # Store the actual dates used for the plot
         actual_start_date_str = start_dt_final.strftime('%Y-%m-%d')
         actual_end_date_str = end_dt_final.strftime('%Y-%m-%d')
 
-        # Filter the DataFrame
         df_filtered = df.loc[(df['Date'] >= start_dt_final) & (df['Date'] <= end_dt_final)].copy().reset_index(drop=True)
 
         if df_filtered.empty:
             err_msg = f"No data available after filtering for site {site_id} in range [{actual_start_date_str} to {actual_end_date_str}]."
             app.logger.warning(err_msg)
-            # Return metadata even if no data in range
             return None, err_msg, station_name, actual_start_date_str, actual_end_date_str, units
 
-        # Use the filtered dataframe from now on
-        df = df_filtered
+        df = df_filtered # Use the filtered dataframe from now on
         app.logger.info(f"Processing {len(df)} data points for flagging and plotting.")
 
         # --- 5. Apply Flagging ---
-        df = apply_flagging(df, site_thresholds) # apply_flagging handles missing DISCHARGE internally
+        df = apply_flagging(df, site_thresholds)
 
         # --- 6. Create Plot ---
         plot_title = f"Data from {actual_start_date_str} to {actual_end_date_str}"
         fig = go.Figure()
 
-        # Add Base Discharge Line (handle potential NaNs with connectgaps=False)
+        # Add Base Discharge Line
         fig.add_trace(go.Scatter(
-            x=df['Date'],
-            y=df['DISCHARGE'],
-            mode='lines',
+            x=df['Date'], y=df['DISCHARGE'], mode='lines',
             line=dict(color='lightgray', width=1.5),
             name='Mean Daily Discharge',
-            connectgaps=False, # Don't connect across NaN gaps
-            hoverinfo='skip' # Base line doesn't need hover usually
+            connectgaps=False, hoverinfo='skip'
         ))
 
         # Get Threshold Values for Plotting
         min_val_thresh = site_thresholds.get("min_val", float('nan'))
         max_val_thresh = site_thresholds.get("max_val", float('nan'))
         spike_unusual_thresh = site_thresholds.get("spike_unusual", float('nan'))
-
-        # Format thresholds for labels/legends
         formatted_spike_threshold = f"{spike_unusual_thresh:.2f}" if pd.notna(spike_unusual_thresh) else "N/A"
         formatted_max_threshold = f"{max_val_thresh:.2f}" if pd.notna(max_val_thresh) else "N/A"
         formatted_min_threshold = f"{min_val_thresh:.2f}" if pd.notna(min_val_thresh) else "N/A"
 
         # Add Flagged Points as Markers
         flag_plot_info = {
-            # Order matters for legend display
             'FLAG_BELOW_CAPACITY': ('red', 'Below Measuring Capacity (Negative) [{}]'),
             'FLAG_ZERO': ('blue', 'Zero Discharge [{}]'),
             'FLAG_REPEATED': ('green', 'Repeated Value (>=4 days, non-zero) [{}]'),
             'FLAG_GREATER_THAN_MaxValue': ('purple', f'Over Max Capacity ({formatted_max_threshold})' + ' [{}]'),
             'UNUSUAL_SPIKE': ('orange', f"Unusual Spike (RoC > {formatted_spike_threshold})" + " [{}]")
-            # Add FLAG_LESS_THAN_Min._Value if desired - maybe dark grey?
-             #'FLAG_LESS_THAN_Min._Value': ('darkgrey', f'Below Min Value ({formatted_min_threshold})' + ' [{}]'),
         }
-
         hover_tmpl = (f'<b>Date:</b> %{{x|%Y-%m-%d}}<br>'
                       f'<b>Value:</b> %{{y:.2f}} {units}<br>'
-                      f'<b>Flag Type:</b> %{{meta}}' # Use meta for flag type
-                      f'<extra></extra>') # Hides extra hover info
+                      f'<b>Flag Type:</b> %{{meta}}'
+                      f'<extra></extra>')
 
         for flag_col_name, (color, legend_format) in flag_plot_info.items():
              if flag_col_name in df.columns and df[flag_col_name].any():
                 subset = df.loc[df[flag_col_name]]
                 count = len(subset)
-                flag_label_only = legend_format.split('[')[0].strip() # Get text part for hover
+                flag_label_only = legend_format.split('[')[0].strip()
                 fig.add_trace(go.Scatter(
-                    x=subset['Date'],
-                    y=subset['DISCHARGE'],
-                    mode='markers',
+                    x=subset['Date'], y=subset['DISCHARGE'], mode='markers',
                     marker=dict(color=color, size=7, symbol='circle'),
-                    name=legend_format.format(count), # Legend entry with count
-                    meta=flag_label_only,             # Store flag type description in meta
-                    hovertemplate=hover_tmpl,
-                    showlegend=True
+                    name=legend_format.format(count), meta=flag_label_only,
+                    hovertemplate=hover_tmpl, showlegend=True
                 ))
 
-        # Get actual min/max dates from the *filtered* data for threshold lines
+        # Add Threshold Lines and Gradient Buffer
         min_plot_dt, max_plot_dt = df["Date"].min(), df["Date"].max()
-
         if pd.notna(min_plot_dt) and pd.notna(max_plot_dt):
-             # Add Min Value Threshold Line (if not zero)
-             if pd.notna(min_val_thresh) and min_val_thresh != 0:
-                 fig.add_trace(go.Scatter(
-                     x=[min_plot_dt, max_plot_dt], y=[min_val_thresh, min_val_thresh],
-                     mode='lines', line=dict(color="gray", dash="dash", width=1),
-                     name=f"Min Value Threshold ({formatted_min_threshold})",
-                     hoverinfo='skip'
-                 ))
-
-             # Add Max Capacity Threshold Line
-             if pd.notna(max_val_thresh):
-                 fig.add_trace(go.Scatter(
-                     x=[min_plot_dt, max_plot_dt], y=[max_val_thresh, max_val_thresh],
-                     mode='lines', line=dict(color="purple", dash="dash", width=1),
-                     name=f"Max Capacity Threshold ({formatted_max_threshold})",
-                     hoverinfo='skip'
-                 ))
-
-                 # --- *** ADD GRADIENT BUFFER AROUND MAX THRESHOLD HERE *** ---
-                 if max_val_thresh > 0: # Only add buffer if threshold is positive
-                     buffer_width = max_val_thresh * BUFFER_PERCENTAGE # Calculate buffer size
-                     dates_for_buffer = df['Date'].tolist() # Get dates as a list
-                     if len(dates_for_buffer) >= 2:
-                         app.logger.info(f"Adding gradient buffer around max capacity ({max_val_thresh:.2f}) with width {buffer_width:.2f}")
-                         add_gradient_buffer(
-                             fig=fig,
-                             dates=dates_for_buffer,
-                             mean_value=max_val_thresh,
-                             buffer=buffer_width,
-                             start_color_rgba=BUFFER_START_COLOR_RGBA,
-                             end_color_rgba=BUFFER_END_COLOR_RGBA,
-                             num_bands=BUFFER_NUM_BANDS
-                         )
-                     else:
-                         app.logger.warning("Not enough data points in the filtered range to draw gradient buffer.")
-                 else:
-                     app.logger.info(f"Max capacity threshold is {max_val_thresh:.2f}, skipping gradient buffer.")
-                 # --- *** END GRADIENT BUFFER ADDITION *** ---
-
+            if pd.notna(min_val_thresh) and min_val_thresh != 0:
+                fig.add_trace(go.Scatter(
+                    x=[min_plot_dt, max_plot_dt], y=[min_val_thresh, min_val_thresh],
+                    mode='lines', line=dict(color="gray", dash="dash", width=1),
+                    name=f"Min Value Threshold ({formatted_min_threshold})", hoverinfo='skip'
+                ))
+            if pd.notna(max_val_thresh):
+                fig.add_trace(go.Scatter(
+                    x=[min_plot_dt, max_plot_dt], y=[max_val_thresh, max_val_thresh],
+                    mode='lines', line=dict(color="purple", dash="dash", width=1),
+                    name=f"Max Capacity Threshold ({formatted_max_threshold})", hoverinfo='skip'
+                ))
+                # --- ADD GRADIENT BUFFER ---
+                if max_val_thresh > 0:
+                    buffer_width = max_val_thresh * BUFFER_PERCENTAGE
+                    dates_for_buffer = df['Date'].tolist()
+                    if len(dates_for_buffer) >= 2:
+                        app.logger.info(f"Adding gradient buffer around max capacity ({max_val_thresh:.2f}) with width {buffer_width:.2f}")
+                        add_gradient_buffer(
+                            fig=fig, dates=dates_for_buffer, mean_value=max_val_thresh,
+                            buffer=buffer_width, start_color_rgba=BUFFER_START_COLOR_RGBA,
+                            end_color_rgba=BUFFER_END_COLOR_RGBA, num_bands=BUFFER_NUM_BANDS
+                        )
+                    else: app.logger.warning("Not enough data points to draw gradient buffer.")
+                else: app.logger.info(f"Max capacity threshold is {max_val_thresh:.2f}, skipping gradient buffer.")
+                # --- END GRADIENT BUFFER ---
         else:
-             app.logger.warning("Could not determine plot date range for threshold lines because min/max plot dates are invalid.")
+             app.logger.warning("Could not determine plot date range for threshold lines.")
+
+
+        # --- 6a. Calculate Statistics for Annotation ---
+        stats_text = "Statistics not available" # Default text
+        # Use dropna() for calculations to ignore missing discharge values
+        discharge_data_numeric = df['DISCHARGE'].dropna()
+        if not discharge_data_numeric.empty:
+            count_rec = discharge_data_numeric.count() # Count of non-NaN values
+            mean_discharge = discharge_data_numeric.mean()
+            min_discharge = discharge_data_numeric.min()
+            max_discharge = discharge_data_numeric.max()
+
+            # Format stats, handle potential NaN/None results just in case
+            count_str = f"{count_rec:,}" if pd.notna(count_rec) else "N/A"
+            mean_str = f"{mean_discharge:.2f}" if pd.notna(mean_discharge) else "N/A"
+            min_str = f"{min_discharge:.2f}" if pd.notna(min_discharge) else "N/A"
+            max_str = f"{max_discharge:.2f}" if pd.notna(max_discharge) else "N/A"
+
+            stats_text = (
+                f"<b>Statistics ({units}):</b><br>"
+                f"--------------------<br>"
+                f"Record Count: {count_str}<br>"
+                f"Mean Daily: {mean_str}<br>"
+                f"Min Value: {min_str}<br>"
+                f"Max Value: {max_str}"
+            )
+            app.logger.info(f"Calculated statistics: Count={count_str}, Mean={mean_str}, Min={min_str}, Max={max_str}")
+        else:
+            app.logger.warning("No valid numeric discharge data found in the selected range to calculate statistics.")
 
 
         # --- 7. Finalize Plot Layout ---
         fig.update_layout(
             title=dict(text=plot_title, x=0.5, y=0.95, font_size=24),
             xaxis=dict(
-                title_text="Date",
-                title_font_size=18,
-                tickfont_size=14,
-                showline=False, # Show axis line? Personal preference
-                zeroline=True, zerolinewidth=2, zerolinecolor='black'
+                title_text="Date", title_font_size=18, tickfont_size=14,
+                showline=False, zeroline=True, zerolinewidth=2, zerolinecolor='black'
             ),
             yaxis=dict(
-                title_text=f"Mean Daily Discharge ({units})",
-                title_font_size=18,
-                tickfont_size=14,
-                showline=False,
-                zeroline=True, zerolinewidth=2, zerolinecolor='black'
+                title_text=f"Mean Daily Discharge ({units})", title_font_size=18, tickfont_size=14,
+                showline=False, zeroline=True, zerolinewidth=2, zerolinecolor='black'
             ),
             legend=dict(
-                orientation="v", # Vertical legend
-                x=1.02, y=1,    # Position outside plot area top-right
+                orientation="v",
+                x=1.0, y=1,   # Position legend top-right outside plot
                 xanchor="left", yanchor="top",
-                title=dict(text="Data Flagging Criteria:", font=dict(size=14)),
-                font=dict(size=12)
+                title=dict(text="Data Flagging Criteria:", font=dict(size=16)),
+                font=dict(size=12),
+                bgcolor='rgba(255,255,255,0.7)' # Optional: slightly transparent background for legend
             ),
-            template="plotly_white", # Clean background
-            margin=dict(t=80, r=300, b=80, l=80), # Adjust right margin for legend
-            height=700, # Adjust plot height
-            hovermode='closest' # Show hover for nearest point
+            # --- ADD ANNOTATION FOR STATS BOX ---
+            annotations=[
+                go.layout.Annotation(
+                    text=stats_text,           # The formatted statistics string
+                    align='left',              # Left-align text inside the box
+                    showarrow=False,           # No arrow pointing from the text
+                    xref='paper',              # Position relative to the whole figure area ('paper')
+                    yref='paper',
+                    x=1.0,                    # Same horizontal position as legend (outside plot area)
+                    y=0.5,                    # Vertical position below the legend (adjust as needed)
+                    xanchor='left',            # Anchor the left side of the box at x=1.02
+                    yanchor='top',             # Anchor the top of the box at y=0.40
+                    bordercolor='black',       # Box border color
+                    borderwidth=1,             # Box border width
+                    bgcolor='rgba(255,255,255,0.8)', # Slightly transparent white background
+                    font=dict(size=16)         # Font size for stats text
+                )
+            ],
+            # --- END ANNOTATION ---
+            template="plotly_white",
+            margin=dict(t=80, r=400, b=80, l=80), # Ensure right margin is large enough for legend + stats
+            height=700,
+            hovermode='closest'
         )
 
         app.logger.info(f"Plot generated successfully for {site_id} [{actual_start_date_str} to {actual_end_date_str}]")
         return fig, None, station_name, actual_start_date_str, actual_end_date_str, units
 
-    # --- Error Handling for API Request/Data Processing ---
+    # --- Error Handling ---
     except requests.exceptions.RequestException as e:
         err = f"Network error fetching data: {e}"
         app.logger.error(f"API Request failed for site {site_id}: {e}", exc_info=True)
-        # Try to get station name if metadata was partially fetched or from thresholds
         name = metadata.get('station_name', 'N/A') if 'metadata' in locals() and metadata else \
                (thresholds_df_global.loc[thresholds_df_global['SiteID_str'] == site_id, 'station_name'].iloc[0]
                 if 'thresholds_df_global' in globals() and thresholds_df_global is not None and 'station_name' in thresholds_df_global.columns and not thresholds_df_global[thresholds_df_global['SiteID_str'] == site_id].empty else 'N/A')
         return None, err, name, start_date_str_requested, end_date_str_requested, units
     except Exception as e:
         err = f"Unexpected error during plot generation process."
-        # Try to get station name if metadata was partially fetched or from thresholds
         name = metadata.get('station_name', 'N/A') if 'metadata' in locals() and metadata else \
                (thresholds_df_global.loc[thresholds_df_global['SiteID_str'] == site_id, 'station_name'].iloc[0]
                 if 'thresholds_df_global' in globals() and thresholds_df_global is not None and 'station_name' in thresholds_df_global.columns and not thresholds_df_global[thresholds_df_global['SiteID_str'] == site_id].empty else 'N/A')
 
         app.logger.error(f"Plot generation internal error for site {site_id}: {e}", exc_info=True)
-        # Use the actual dates calculated if possible, otherwise fall back to requested
         final_start = actual_start_date_str if 'actual_start_date_str' in locals() and actual_start_date_str else start_date_str_requested
         final_end = actual_end_date_str if 'actual_end_date_str' in locals() and actual_end_date_str else end_date_str_requested
         final_units = units if 'units' in locals() and units != 'Unknown Units' else 'Unknown Units'
@@ -686,7 +684,7 @@ def generate_plot_for_site(site_id, start_date_str_requested, end_date_str_reque
 
 
 
-# --- Flask Route: /plot (Unchanged logic, relies on modified generate_plot_for_site) ---
+# --- Flask Route: /plot ---
 @app.route('/plot')
 def show_plot():
     site_id = request.args.get('id')
@@ -851,7 +849,7 @@ def show_plot():
                                   units=units_val), status
 
 
-# --- Flask Route: / (Index - Unchanged) ---
+# --- Flask Route: / (Index) ---
 @app.route('/')
 def index():
     """Renders the initial page with default date range."""
