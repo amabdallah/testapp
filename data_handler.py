@@ -12,7 +12,7 @@ from typing import Dict, Any, Tuple, Optional, Sequence, List # Keep this import
 import os
 from pathlib import Path
 import time
-import sys # <--- IMPORT SYS FOR STDERR PRINTING
+import sys
 
 # File locking import (Unix-specific)
 try:
@@ -35,115 +35,74 @@ BUFFER_START_COLOR_RGBA = (128, 0, 128, 0.2)
 BUFFER_END_COLOR_RGBA = (128, 0, 128, 0.0)
 
 # --- Path Definition ---
+# (Path definition logic remains the same as previous version with debug prints)
 try:
-    # Attempt to determine script directory and construct primary path
-    script_dir = Path(__file__).resolve().parent
-    csv_filename = "thresholds.csv"
-    THRESHOLDS_CSV_PATH = script_dir / csv_filename
+    script_dir = Path(__file__).resolve().parent; csv_filename = "thresholds.csv"; THRESHOLDS_CSV_PATH = script_dir / csv_filename
     if not THRESHOLDS_CSV_PATH.is_file():
-        # If primary path fails, try fallback relative path
         THRESHOLDS_CSV_PATH_FALLBACK = Path(csv_filename)
         if THRESHOLDS_CSV_PATH_FALLBACK.is_file():
             THRESHOLDS_CSV_PATH = THRESHOLDS_CSV_PATH_FALLBACK
-            # Use print to stderr for initialization phase logging
             print(f"WARNING: Threshold file not found at primary '{script_dir / csv_filename}'. Falling back to relative path '{csv_filename}' ({THRESHOLDS_CSV_PATH}).", file=sys.stderr)
-        else:
-            # Log error if both primary and fallback fail
-            print(f"ERROR: Threshold file not found at primary path '{script_dir / csv_filename}' or fallback relative path '{csv_filename}'.", file=sys.stderr)
-            # No need to check exists() again here, just report failure
-    else:
-        # Log success if primary path found
-        print(f"INFO: Using primary threshold file path: {THRESHOLDS_CSV_PATH}", file=sys.stderr)
+        else: print(f"ERROR: Threshold file not found at primary path '{script_dir / csv_filename}' or fallback relative path '{csv_filename}'.", file=sys.stderr)
+    else: print(f"INFO: Using primary threshold file path: {THRESHOLDS_CSV_PATH}", file=sys.stderr)
 except NameError:
-    # Fallback if __file__ is not defined (e.g., interactive session)
     csv_filename = "thresholds.csv"; THRESHOLDS_CSV_PATH = Path(csv_filename)
     print(f"WARNING: Could not determine script directory via __file__. Using relative path: {THRESHOLDS_CSV_PATH}", file=sys.stderr)
     if not THRESHOLDS_CSV_PATH.is_file(): print(f"ERROR: Relative threshold file path '{THRESHOLDS_CSV_PATH}' does not point to an existing file.", file=sys.stderr)
 
-# --- ADDED DEBUG LOGGING ---
-# Print the final resolved path and check existence right after definition
 print(f"DEBUG: Final THRESHOLDS_CSV_PATH resolved to: {THRESHOLDS_CSV_PATH}", file=sys.stderr)
 print(f"DEBUG: Does the file exist at that path? {THRESHOLDS_CSV_PATH.is_file()}", file=sys.stderr)
-sys.stderr.flush() # Force flush to ensure it appears quickly in logs
-# --- END ADDED DEBUG LOGGING ---
+sys.stderr.flush()
 
 # --- Global Threshold Variable ---
 thresholds_df_global = None
 
-# --- File Locking Functions ---
+# --- File Locking Functions (unchanged) ---
 def acquire_lock(file_handle, lock_type, logger, timeout=5):
-    """Tries to acquire a file lock (shared or exclusive). Returns True on success, False on timeout/error."""
     if not HAS_FCNTL: return True
     start_time = time.time(); lock_type_str = "Shared" if lock_type == fcntl.LOCK_SH else "Exclusive"
     while time.time() - start_time < timeout:
-        try:
-            fcntl.flock(file_handle, lock_type | fcntl.LOCK_NB); logger.debug(f"{lock_type_str} lock acquired for {file_handle.name}"); return True
+        try: fcntl.flock(file_handle, lock_type | fcntl.LOCK_NB); logger.debug(f"{lock_type_str} lock acquired for {file_handle.name}"); return True
         except (BlockingIOError, OSError) as e:
-            # Handle potential errors during locking attempt
-            if isinstance(e, OSError) and e.errno not in [11, 13]: # EAGAIN/EWOULDBLOCK, EACCES/EPERM
-                 logger.error(f"Unexpected OSError ({e.errno}) acquiring lock: {e}", exc_info=True); raise
-            time.sleep(0.1) # Wait before retrying
+            if isinstance(e, OSError) and e.errno not in [11, 13]: logger.error(f"Unexpected OSError ({e.errno}) acquiring lock: {e}", exc_info=True); raise
+            time.sleep(0.1)
     logger.error(f"Could not acquire {lock_type_str} lock on {file_handle.name} within {timeout}s."); return False
 
 def release_lock(file_handle, logger):
-    """Releases a file lock if fcntl is available and handle is valid."""
     if HAS_FCNTL and file_handle and not file_handle.closed:
         try: fcntl.flock(file_handle, fcntl.LOCK_UN); logger.debug(f"Lock released for {file_handle.name}")
         except Exception as e: logger.error(f"Error releasing lock for {file_handle.name}: {e}", exc_info=True)
 
-# --- Threshold Loading Function ---
+# --- Threshold Loading Function (unchanged) ---
 def load_thresholds(file_path: Path, logger: logging.Logger) -> Optional[pd.DataFrame]:
-    """Loads the thresholds CSV file into a DataFrame using file locking. Returns None on error."""
     global thresholds_df_global
     file_path_str = str(file_path); logger.info(f"Attempting to load thresholds from: {file_path_str}")
     f = None; lock_acquired = False
     try:
-        # Check file existence before opening
-        if not file_path.is_file():
-            # Use the passed logger instance now it should be available
-            logger.error(f"File not found at '{file_path_str}' during load attempt.")
-            raise FileNotFoundError(f"File not found at '{file_path_str}'")
-
-        f = open(file_path_str, 'r')
-        lock_acquired = acquire_lock(f, fcntl.LOCK_SH if HAS_FCNTL else 0, logger)
-
-        if not lock_acquired:
-            logger.error(f"Failed to acquire read lock for {file_path_str}. Aborting load.")
-            # Ensure file is closed if opened before lock failure
-            if f and not f.closed:
-                 f.close()
-            return None # Explicitly return None on lock failure
-
+        if not file_path.is_file(): logger.error(f"File not found at '{file_path_str}' during load attempt."); raise FileNotFoundError(f"File not found at '{file_path_str}'")
+        f = open(file_path_str, 'r'); lock_acquired = acquire_lock(f, fcntl.LOCK_SH if HAS_FCNTL else 0, logger)
+        if not lock_acquired: logger.error(f"Failed to acquire read lock for {file_path_str}. Aborting load."); return None
         thresholds_df = pd.read_csv(f); logger.info(f"Successfully read CSV. Validating columns...")
-        # Column validation...
         missing_core = [c for c in CORE_REQUIRED_THRESHOLD_COLS if c not in thresholds_df.columns]
         if missing_core: logger.error(f"Missing CORE columns in '{file_path_str}': {missing_core}"); return None
         if "SiteID" not in thresholds_df.columns: logger.error(f"'SiteID' column missing in '{file_path_str}'."); return None
         if 'station_name' not in thresholds_df.columns: logger.warning(f"'station_name' column missing in '{file_path_str}'."); thresholds_df['station_name'] = 'N/A'
         thresholds_df["SiteID_str"] = thresholds_df["SiteID"].astype(str)
-
         logger.info(f"Thresholds loaded successfully from '{file_path_str}'."); thresholds_df_global = thresholds_df; return thresholds_df
     except Exception as e: logger.error(f"Error loading thresholds from '{file_path_str}': {e}", exc_info=True); return None
     finally:
-        # Ensure lock release and file closing
         if lock_acquired and f: release_lock(f, logger)
         if f and not f.closed: f.close()
-# --- END load_thresholds Function ---
 
-# --- Get Site Thresholds Function ---
+# --- Get Site Thresholds Function (unchanged) ---
 def get_site_thresholds(site_id: str, logger: logging.Logger) -> Optional[Dict[str, Any]]:
-    """ Gets and validates thresholds for a specific site from the global DataFrame. """
     logger.info(f"Getting thresholds for SiteID {site_id}...")
-    if thresholds_df_global is None or thresholds_df_global.empty:
-        logger.error("Global thresholds empty or not loaded. Cannot get site thresholds.") # More explicit error
-        return None
+    if thresholds_df_global is None or thresholds_df_global.empty: logger.error("Global thresholds empty or not loaded. Cannot get site thresholds."); return None
     if "SiteID_str" not in thresholds_df_global.columns: logger.error("'SiteID_str' column missing from loaded global thresholds."); return None
-
     site_row = thresholds_df_global[thresholds_df_global["SiteID_str"] == str(site_id)]
     if site_row.empty: logger.warning(f"SiteID {site_id} not found in loaded thresholds."); return None
     try:
         row = site_row.iloc[0]; v_thr = {"min_val": float(STATIC_MIN_THRESHOLD)}; missing = []; errors = []
-        # --- Threshold validation logic (unchanged) ---
         for col in CORE_REQUIRED_THRESHOLD_COLS:
             raw = row.get(col)
             if raw is None or pd.isna(raw): missing.append(f"'{col}' (missing)"); continue
@@ -165,14 +124,12 @@ def get_site_thresholds(site_id: str, logger: logging.Logger) -> Optional[Dict[s
         if missing: logger.error(f"Missing/invalid CORE thresholds SiteID {site_id}: {missing}"); return None
         if errors: [logger.warning(f"SiteID {site_id}: {e}") for e in errors]
         if "max_val" not in v_thr or "spike_unusual" not in v_thr: logger.error(f"Internal error populating thresholds dict SiteID {site_id}."); return None
-        # --- End Threshold validation ---
         logger.info(f"Thresholds validated SiteID {site_id}: {v_thr}"); return v_thr
     except Exception as e: logger.error(f"Unexpected error validating thresholds SiteID {site_id}: {e}", exc_info=True); return None
 
-
 # --- Apply Flagging Function (unchanged) ---
 def apply_flagging(df: pd.DataFrame, thresholds: Dict[str, Any], logger: logging.Logger) -> pd.DataFrame:
-    """ Applies data quality flags based on provided thresholds. """
+    # (Code unchanged)
     logger.info("Applying flagging logic...")
     required_keys = ['min_val', 'max_val', 'spike_unusual', 'repeated_days']
     flag_cols = ['FLAG_LESS_THAN_Min._Value', 'FLAG_ZERO', 'FLAG_REPEATED', 'FLAG_GREATER_THAN_MaxValue', 'UNUSUAL_SPIKE', 'FLAG_BELOW_CAPACITY']
@@ -198,19 +155,16 @@ def apply_flagging(df: pd.DataFrame, thresholds: Dict[str, Any], logger: logging
 
 # --- Date Validation Function (unchanged) ---
 def validate_date(date_str):
-    """Validate date string format YYYY-MM-DD. Returns datetime object or None."""
     if not date_str: return None
     try: return datetime.strptime(date_str, '%Y-%m-%d')
     except ValueError: return None
 
 # --- Color Interpolation Function (unchanged) ---
 def interpolate_color(c1, c2, fr):
-    """ Interpolates between two RGBA tuples based on fraction (0.0 to 1.0). """
     r1,g1,b1,a1=c1; r2,g2,b2,a2=c2; fr=max(0.0,min(1.0,fr)); r=int(r1+(r2-r1)*fr); g=int(g1+(g2-g1)*fr); b=int(b1+(b2-b1)*fr); a=a1+(a2-a1)*fr; r=max(0,min(255,r)); g=max(0,min(255,g)); b=max(0,min(255,b)); return f'rgba({r},{g},{b},{a:.4f})'
 
 # --- Gradient Buffer Function (unchanged) ---
 def add_gradient_buffer(fig, dates, mean_value, buffer, start_color, end_color, num_bands, logger):
-    """ Adds gradient filled buffer bands around a central line value. """
     if buffer <= 0 or num_bands <= 0: logger.warning("Skipping gradient: invalid buffer/bands."); return
     n=len(dates);
     if n<2: logger.warning("Skipping gradient: not enough points."); return
@@ -223,30 +177,44 @@ def add_gradient_buffer(fig, dates, mean_value, buffer, start_color, end_color, 
         if np.isfinite(y_high_l) and np.isfinite(y_low_l): y_lower = [y_low_l]*n + [y_high_l]*n; fig.add_trace(go.Scatter(x=x_poly, y=y_lower, fill='toself', fillcolor=band_color, line=dict(width=0), hoverinfo="skip", showlegend=False, mode='lines'))
 
 
-# --- Core Plot Generation Function (unchanged) ---
+# --- Core Plot Generation Function ---
+# --- MODIFIED ---
 def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str], end_date_str_requested: Optional[str], is_reset: bool, logger: logging.Logger) -> Tuple[Optional[go.Figure], Optional[str], str, str, str, str, Optional[Dict], Optional[Dict]]:
     """
-    Generates Plotly figure for a site with legend positioned on the right,
-    increased font sizes, and max threshold in legend.
+    Generates Plotly figure for a site. Checks for global threshold load failure first.
     Returns: tuple(fig, error_msg, station_name, start_date_actual, end_date_actual, units, site_thresholds_dict, stats_dict)
     """
     station_name = "N/A"; units = 'Unknown Units'; site_thresholds = None; stats_dict = None
     actual_start_date_str = start_date_str_requested or ""; actual_end_date_str = end_date_str_requested or ""
     logger.info(f"Plot Gen Start: Site={site_id}, ReqStart={start_date_str_requested}, ReqEnd={end_date_str_requested}, Reset={is_reset}")
 
-    # 1. Get Thresholds
-    site_thresholds = get_site_thresholds(site_id, logger) # This now relies on load_thresholds having worked
-    # Get station name from potentially loaded global df
-    if thresholds_df_global is not None and 'station_name' in thresholds_df_global.columns and 'SiteID_str' in thresholds_df_global.columns:
-        site_row = thresholds_df_global[thresholds_df_global['SiteID_str'] == str(site_id)]
-        if not site_row.empty: station_name = site_row['station_name'].iloc[0]
-    # Check if get_site_thresholds failed (which implies load_thresholds might have failed earlier)
-    if site_thresholds is None:
-        err = f"Thresholds missing or invalid for SiteID {site_id}. Cannot generate plot." # More specific message
-        logger.error(err)
-        return None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None # Return None for thresholds too
+    # --- NEW: Check if global thresholds failed to load initially ---
+    if thresholds_df_global is None or thresholds_df_global.empty:
+        err = "CRITICAL ERROR: The application's threshold configuration file failed to load or is empty. Cannot process any site data."
+        logger.error(f"{err} (Attempted to generate plot for SiteID: {site_id})")
+        # Return structure: (fig, error_msg, name, start, end, units, thresholds_dict, stats_dict)
+        # Pass back known values like requested dates where possible for context
+        return None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
+    # --- END NEW CHECK ---
 
-    # 2. Fetch Data (unchanged logic)
+    # 1. Get Site-Specific Thresholds (only if global load was okay)
+    site_thresholds = get_site_thresholds(site_id, logger)
+    # Try to get station name from global df even if site_thresholds is None for this specific site
+    if thresholds_df_global is not None and 'station_name' in thresholds_df_global.columns and 'SiteID_str' in thresholds_df_global.columns:
+        site_row_name = thresholds_df_global[thresholds_df_global['SiteID_str'] == str(site_id)]
+        if not site_row_name.empty: station_name = site_row_name['station_name'].iloc[0]
+
+    # Check if get_site_thresholds failed for this specific site
+    if site_thresholds is None:
+        # This error now means the site was not found, or its specific row had invalid core data IN THE LOADED FILE
+        err = f"Error: Threshold data missing or invalid for SiteID {site_id} in the loaded configuration file. Cannot generate plot." # Reworded slightly
+        logger.error(err)
+        # Still return None for site_thresholds dict
+        return None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
+
+    # --- Steps 2-7 (Fetch Data, Process, Filter, Flag, Plot, Stats, Layout) remain the same ---
+    # 2. Fetch Data
+    # (Code unchanged)
     api_end = datetime.now().strftime('%Y-%m-%d') if (is_reset or not validate_date(end_date_str_requested)) else end_date_str_requested
     api_start = "1900-01-01" if (is_reset or not validate_date(start_date_str_requested)) else start_date_str_requested
     logger.info(f"API Call Params: Start={api_start}, End={api_end}")
@@ -257,9 +225,10 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     except requests.exceptions.RequestException as e: err = f"API Error site {site_id}: {e}"; logger.error(err, exc_info=True); return None, err, station_name, start_date_str_requested, end_date_str_requested, units, site_thresholds, None
     except (json.JSONDecodeError, ValueError) as e: err = f"JSON Decode Error site {site_id}: {e}. Snippet: {response.text[:200]}..."; logger.error(err); return None, err, station_name, start_date_str_requested, end_date_str_requested, units, site_thresholds, None
 
-    # 3. Process Data (unchanged logic)
+    # 3. Process Data
+    # (Code unchanged)
     metadata = {f: data.get(f, "N/A") for f in ["station_name", "units"]}; units = metadata.get('units', 'Unknown Units'); units = units if units and units!='N/A' else 'Unknown Units'
-    if metadata.get('station_name') and metadata['station_name'] != 'N/A': station_name = metadata['station_name']
+    if metadata.get('station_name') and metadata['station_name'] != 'N/A': station_name = metadata['station_name'] # Update station name from API if available
     logger.info(f"API Meta: Name={station_name}, Units={units}")
     if "data" not in data or not isinstance(data["data"], list) or not data["data"]: err = f"No 'data' in API response site {site_id}."; logger.warning(err); return None, err, station_name, start_date_str_requested, end_date_str_requested, units, site_thresholds, None
     try:
@@ -269,7 +238,8 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     except Exception as e: err = f"Error processing API data site {site_id}: {e}"; logger.error(err, exc_info=True); return None, err, station_name, start_date_str_requested, end_date_str_requested, units, site_thresholds, None
     if df.empty: err = f"No valid data points after processing site {site_id}."; logger.warning(err); return None, err, station_name, start_date_str_requested, end_date_str_requested, units, site_thresholds, None
 
-    # 4. Filter Dates (unchanged logic)
+    # 4. Filter Dates
+    # (Code unchanged)
     min_data_dt, max_data_dt = df['Date'].min(), df['Date'].max(); start_req_dt_obj = validate_date(start_date_str_requested); end_req_dt_obj = validate_date(end_date_str_requested)
     start_dt_final = min_data_dt if (is_reset or not start_req_dt_obj) else max(start_req_dt_obj, min_data_dt); end_dt_final = max_data_dt if (is_reset or not end_req_dt_obj) else min(end_req_dt_obj, max_data_dt)
     if pd.isna(start_dt_final) or pd.isna(end_dt_final) or start_dt_final > end_dt_final: logger.warning("Date range invalid/no overlap. Using full data range."); start_dt_final, end_dt_final = min_data_dt, max_data_dt
@@ -279,10 +249,12 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     if df_filtered.empty: err = f"No data for site {site_id} in range [{actual_start_date_str} to {actual_end_date_str}]."; logger.warning(err); return None, err, station_name, actual_start_date_str, actual_end_date_str, units, site_thresholds, None
     df = df_filtered; logger.info(f"Processing {len(df)} points after date filtering.")
 
-    # 5. Apply Flagging (unchanged logic)
+    # 5. Apply Flagging
+    # (Code unchanged)
     df = apply_flagging(df, site_thresholds, logger)
 
-    # 6. Create Plot Figure (unchanged logic)
+    # 6. Create Plot Figure
+    # (Code unchanged)
     plot_title = f"Data from {actual_start_date_str} to {actual_end_date_str}"
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df['Date'], y=df['DISCHARGE'], mode='lines', name='Discharge', line=dict(color='lightgray', width=1.5), connectgaps=False, hoverinfo='skip', showlegend=False))
@@ -298,19 +270,21 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     if pd.notna(min_plot_dt) and pd.notna(max_plot_dt):
         plot_date_range = [min_plot_dt, max_plot_dt]
         if pd.notna(min_val_thresh) and min_val_thresh != 0:
-            fig.add_trace(go.Scatter(x=plot_date_range, y=[min_val_thresh]*2, mode='lines', name=f"Min Thr ({min_val_thresh:.2f})", line=dict(color="gray", dash="dash", width=1), hoverinfo='skip', showlegend=False)) # Min still hidden
+            fig.add_trace(go.Scatter(x=plot_date_range, y=[min_val_thresh]*2, mode='lines', name=f"Min Thr ({min_val_thresh:.2f})", line=dict(color="gray", dash="dash", width=1), hoverinfo='skip', showlegend=False))
         if pd.notna(max_val_thresh):
-            fig.add_trace(go.Scatter(x=plot_date_range, y=[max_val_thresh]*2, mode='lines', name=f"Max Thr ({max_val_thresh:.2f})", line=dict(color="purple", dash="dash", width=1), hoverinfo='skip', showlegend=True)) # Max now shown
+            fig.add_trace(go.Scatter(x=plot_date_range, y=[max_val_thresh]*2, mode='lines', name=f"Max Thr ({max_val_thresh:.2f})", line=dict(color="purple", dash="dash", width=1), hoverinfo='skip', showlegend=True))
             if max_val_thresh > 0:
                 buffer = max_val_thresh * BUFFER_PERCENTAGE
                 if len(df['Date']) >= 2: add_gradient_buffer(fig, df['Date'], max_val_thresh, buffer, BUFFER_START_COLOR_RGBA, BUFFER_END_COLOR_RGBA, BUFFER_NUM_BANDS, logger)
 
-    # 6a. Calculate Statistics (unchanged logic)
+    # 6a. Calculate Statistics
+    # (Code unchanged)
     stats_dict = None; discharge_num = df['DISCHARGE'].dropna()
     if not discharge_num.empty: stats_dict = {"count": f"{discharge_num.count():,}", "mean": f"{discharge_num.mean():.2f}" if pd.notna(discharge_num.mean()) else "N/A", "min": f"{discharge_num.min():.2f}" if pd.notna(discharge_num.min()) else "N/A", "max": f"{discharge_num.max():.2f}" if pd.notna(discharge_num.max()) else "N/A", "units": units}; logger.info(f"Stats: {stats_dict}")
     else: logger.warning("No numeric discharge data for stats.")
 
-    # 7. Finalize Layout (unchanged logic)
+    # 7. Finalize Layout
+    # (Code unchanged)
     fig.update_layout(
         title=dict(text=plot_title, x=0.5, y=0.97, font_size=24),
         xaxis=dict(title_text="Date", title_font_size=20, tickfont_size=16, showline=False, zeroline=True, zerolinewidth=1.5, zerolinecolor='darkgrey'),
@@ -321,67 +295,46 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     )
 
     logger.info(f"Plot generated successfully for {site_id} [{actual_start_date_str} to {actual_end_date_str}]")
+    # Return the successfully generated figure and other info
     return fig, None, station_name, actual_start_date_str, actual_end_date_str, units, site_thresholds, stats_dict
 # --- END generate_plot_for_site ---
 
 
 # --- Update Threshold in CSV Function (unchanged) ---
 def update_threshold_in_csv(site_id: str, new_thresholds: Dict[str, Any], logger: logging.Logger) -> Tuple[bool, str]:
-    """ Updates the threshold values for a given site_id in the CSV file. """
+    # (Code unchanged)
     global thresholds_df_global
     f = None; lock_acquired = False
     success_status = False; return_message = "An unknown issue occurred during threshold update."
     try:
         file_path_str = str(THRESHOLDS_CSV_PATH)
-        if not THRESHOLDS_CSV_PATH.is_file(): raise FileNotFoundError(f"Threshold file '{file_path_str}' not found for update.") # More specific message
-
-        f = open(file_path_str, 'r+') # Open for read/write
-        lock_acquired = acquire_lock(f, fcntl.LOCK_EX if HAS_FCNTL else 0, logger)
-        if not lock_acquired:
-            msg = f"Failed to acquire write lock for {file_path_str}. Update aborted."
-            logger.error(msg); success_status = False; return_message = "Error: Could not save thresholds (file busy)."
+        if not THRESHOLDS_CSV_PATH.is_file(): raise FileNotFoundError(f"Threshold file '{file_path_str}' not found for update.")
+        f = open(file_path_str, 'r+'); lock_acquired = acquire_lock(f, fcntl.LOCK_EX if HAS_FCNTL else 0, logger)
+        if not lock_acquired: msg = f"Failed to acquire write lock for {file_path_str}. Update aborted."; logger.error(msg); success_status = False; return_message = "Error: Could not save thresholds (file busy)."
         else:
-            # Read current data, find row, update, write back
             temp_df = pd.read_csv(f); site_id_col = "SiteID"
-            # Ensure SiteID column exists before filtering
-            if site_id_col not in temp_df.columns:
-                 raise ValueError(f"'{site_id_col}' column not found in {file_path_str}")
-
+            if site_id_col not in temp_df.columns: raise ValueError(f"'{site_id_col}' column not found in {file_path_str}")
             row_index = temp_df[temp_df[site_id_col].astype(str) == str(site_id)].index
             if not row_index.empty:
                 idx = row_index[0]; logger.info(f"Updating thresholds SiteID {site_id} index {idx}...")
-                # Update values
-                temp_df.loc[idx, 'Over_Capacity'] = new_thresholds['max_val']
-                temp_df.loc[idx, 'Unusual_Spike'] = new_thresholds['spike_unusual']
-                # Ensure Repeated_Days column exists before updating
+                temp_df.loc[idx, 'Over_Capacity'] = new_thresholds['max_val']; temp_df.loc[idx, 'Unusual_Spike'] = new_thresholds['spike_unusual']
                 if 'Repeated_Days' not in temp_df.columns: temp_df['Repeated_Days'] = DEFAULT_REPEATED_DAYS
                 temp_df.loc[idx, 'Repeated_Days'] = new_thresholds['repeated_days']
-
-                # Overwrite the file
                 f.seek(0); f.truncate(); temp_df.to_csv(f, index=False); f.flush()
-                # Try to force sync to disk
                 if hasattr(os, 'fsync'):
                     try: os.fsync(f.fileno()); logger.debug(f"os.fsync completed: {file_path_str}")
-                    except OSError as fsync_err: logger.warning(f"os.fsync failed: {fsync_err}") # Log fsync errors as warnings
-
+                    except OSError as fsync_err: logger.warning(f"os.fsync failed: {fsync_err}")
                 logger.info(f"Thresholds updated ok: {file_path_str}"); success_status = True; return_message = f"Thresholds for Site ID {site_id} updated."
-            else:
-                logger.error(f"SiteID {site_id} not found in {file_path_str} for update."); success_status = False; return_message = f"Error: Site ID {site_id} not found."
-    # Specific error handling
+            else: logger.error(f"SiteID {site_id} not found in {file_path_str} for update."); success_status = False; return_message = f"Error: Site ID {site_id} not found."
     except FileNotFoundError as e: logger.error(e); success_status=False; return_message = "Error: Threshold file not found during update."
     except PermissionError: logger.error(f"Permission denied writing to: '{THRESHOLDS_CSV_PATH}'."); success_status=False; return_message = "Error: Permission denied saving thresholds."
-    except ValueError as e: # Catch potential errors like missing SiteID column
-        logger.error(f"Value error during CSV update for {site_id}: {e}", exc_info=True); success_status=False; return_message = f"Error processing threshold file data: {e}"
+    except ValueError as e: logger.error(f"Value error during CSV update for {site_id}: {e}", exc_info=True); success_status=False; return_message = f"Error processing threshold file data: {e}"
     except Exception as e: logger.error(f"Unexpected error updating CSV {site_id}: {e}", exc_info=True); success_status=False; return_message = "Unexpected server error saving thresholds."
     finally:
-        # Ensure lock release and file close
         if lock_acquired and f: release_lock(f, logger)
         if f and not f.closed: f.close(); logger.debug("File closed in finally block during update.")
-
-    # Reload global thresholds ONLY on successful write
     if success_status and return_message.startswith("Thresholds for Site ID"):
         logger.info("Reloading thresholds into global DataFrame after successful update.")
-        load_thresholds(THRESHOLDS_CSV_PATH, logger) # Pass the logger instance
-
+        load_thresholds(THRESHOLDS_CSV_PATH, logger)
     return success_status, return_message
 # --- END update_threshold_in_csv ---
