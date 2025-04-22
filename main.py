@@ -16,7 +16,7 @@ try:
         update_threshold_in_csv,
         THRESHOLDS_CSV_PATH, # Import path constant
         HAS_FCNTL, # Import check result
-        thresholds_df_global # Import global to check if loaded in __main__
+        # No need to import thresholds_df_global here anymore
     )
 except ImportError as e:
     # Log critical error and exit if essential handler code cannot be imported
@@ -44,10 +44,10 @@ else:
     app.logger.info("fcntl available. File locking enabled.")
 
 # --- Load Thresholds AT STARTUP ---  <<<<<<<<< CORRECT LOCATION
-# This code now runs when Gunicorn imports the module
+# This code now runs when Gunicorn imports the module OR when executed directly
 app.logger.info(f"Attempting initial threshold load from: {THRESHOLDS_CSV_PATH}")
 if load_thresholds(THRESHOLDS_CSV_PATH, app.logger) is None:
-    # Log critical error, but allow app to start to potentially show the error message in the route
+    # Log critical error, but allow app to potentially start to show the error message in the route
     app.logger.critical(f"CRITICAL STARTUP FAILURE: Initial threshold load failed from '{THRESHOLDS_CSV_PATH}'. Check file existence, path, permissions, and format in logs.")
 else:
     app.logger.info("Initial threshold load successful.")
@@ -197,7 +197,7 @@ HTML_TEMPLATE = """
         </div> {# End threshold-controls div #}
         {% elif site_id and not error %} {# Show message if site ID entered but thresholds could not be loaded for editing #}
         <div class="threshold-controls">
-             <p style="text-align: center; color: #888;">Thresholds could not be loaded for editing for Site ID {{ site_id }}.</p>
+             <p style="text-align: center; color: #888;">Threshold editing is unavailable. Thresholds may not have loaded correctly for Site ID {{ site_id }}.</p>
         </div>
         {% endif %}
     </div> {# End controls div #}
@@ -285,7 +285,7 @@ HTML_TEMPLATE = """
 # --- Flask Route: Update Thresholds ---
 @app.route('/update_thresholds', methods=['POST'])
 def update_thresholds():
-    # (Keep your route function code here - seems okay)
+    # (Keep route function code here - same as previous version)
     site_id = request.form.get('site_id')
     start_date = request.form.get('start_date')
     end_date = request.form.get('end_date')
@@ -293,13 +293,11 @@ def update_thresholds():
         flash("Error: Site ID missing for update.", "error")
         return redirect(url_for('index')) # Redirect to index if no site ID
     try:
-        # Validate and convert form data
         new_vals = {
             'max_val': float(request.form['max_val']),
             'spike_unusual': float(request.form['spike_unusual']),
             'repeated_days': int(request.form['repeated_days'])
         }
-        # Add specific value validation
         if new_vals['repeated_days'] < 2:
             flash("Error: 'Repeated Value Days' must be 2 or greater.", "error")
             raise ValueError("Repeated days threshold must be >= 2")
@@ -309,188 +307,127 @@ def update_thresholds():
 
     except (ValueError, TypeError, KeyError) as e:
         app.logger.error(f"Invalid threshold format/value submitted for SiteID {site_id}: {e}")
-        # Flash specific error if not already flashed
-        if not any(m[1] == 'error' for m in get_flashed_messages(with_categories=True)):
+        # Avoid duplicate flashing
+        existing_flashes = [m[1] for m in get_flashed_messages(with_categories=True)]
+        if 'error' not in existing_flashes:
              flash("Error: Invalid number format or missing value for thresholds.", "error")
-        # Redirect back to the plot page for the same site/dates on error
         return redirect(url_for('show_plot', id=site_id, start_date=start_date, end_date=end_date))
 
     app.logger.info(f"Attempting to update thresholds for SiteID {site_id} with values: {new_vals}")
     success, message = update_threshold_in_csv(site_id, new_vals, app.logger)
     flash(message, "success" if success else "error")
-
-    # Redirect back to the plot page for the same site/dates after attempt
     return redirect(url_for('show_plot', id=site_id, start_date=start_date, end_date=end_date))
 
 
 # --- Flask Route: Show Plot ---
 @app.route('/plot')
 def show_plot():
-    # --- Get request arguments ---
+    # (Keep route function code here - same as previous version)
     site_id = request.args.get('id')
     start_date_req = request.args.get('start_date')
     end_date_req = request.args.get('end_date')
     is_reset = request.args.get('reset') == 'true'
     app.logger.info(f"Plot Request Received: id={site_id}, start={start_date_req}, end={end_date_req}, reset={is_reset}")
 
-    # --- Initialize template variables ---
-    plot_output_id = None
-    err_msg = None
-    fig = None
-    plot_div = None
-    status = 200
-    st_name = "Data Quality Analysis" # Default title
-    units_val = 'Unknown Units'
-    current_thresholds_for_template = None
-    stats_dict_for_template = None
-    # Use requested dates for rendering initially, may be updated by generate_plot
-    start_render = start_date_req
-    end_render = end_date_req
-    final_start = None # Will hold actual plotted start
-    final_end = None   # Will hold actual plotted end
+    plot_output_id = None; err_msg = None; fig = None; plot_div = None; status = 200
+    st_name = "Data Quality Analysis"; units_val = 'Unknown Units'
+    current_thresholds_for_template = None; stats_dict_for_template = None
+    start_render = start_date_req; end_render = end_date_req
+    final_start = None; final_end = None
 
-    # --- Handle missing Site ID ---
     if not site_id or not site_id.strip():
         if not site_id: app.logger.info("No Site ID provided. Rendering initial form.")
         else: app.logger.warning("Empty Site ID provided."); err_msg = "Site ID cannot be empty."; status = 400
-        # Set default dates for the form if none provided
         today=datetime.now(); def_end=today.strftime('%Y-%m-%d'); def_start=(today-timedelta(days=30)).strftime('%Y-%m-%d')
         start_render = start_date_req if start_date_req else def_start
         end_render = end_date_req if end_date_req else def_end
-        # Render empty template
         return render_template_string(HTML_TEMPLATE,
                                       site_id=site_id, station_name=st_name, start_date=start_render, end_date=end_render,
                                       error=err_msg, plot_div=None, units=units_val,
                                       current_thresholds=None, stats_dict=None, plot_output_id=None), status
 
-    # --- Determine processing dates ---
     start_proc, end_proc = None, None
     if is_reset or not start_date_req or not end_date_req:
-        # Reset flag or missing dates means use full range from data_handler
         if not is_reset: app.logger.info(f"Site '{site_id}' missing date range in request. Resetting to full range.")
         else: app.logger.info(f"Reset requested for Site '{site_id}'. Using full range.")
-        is_reset = True # Ensure reset flag is true for generate_plot call
-        start_render, end_render = None, None # Don't pre-fill dates in form on reset
+        is_reset = True
+        start_render, end_render = None, None
     else:
-        # Use provided dates if they exist
         start_proc, end_proc = start_date_req, end_date_req
-        start_render, end_render = start_proc, end_proc # Use these for rendering form
+        start_render, end_render = start_proc, end_proc
         app.logger.info(f"Using requested date range for processing: {start_proc} to {end_proc}")
 
-    # --- Call core plot generation logic ---
     app.logger.info(f"Calling generate_plot_for_site: id={site_id}, start={start_proc}, end={end_proc}, reset={is_reset}")
     try:
-        # Unpack all 8 values returned by the updated generate_plot_for_site
         fig, err_func, name_func, final_start, final_end, units_val, current_thresholds_for_template, stats_dict_for_template = generate_plot_for_site(
             site_id, start_proc, end_proc, is_reset=is_reset, logger=app.logger
         )
 
-        # Use actual dates from plot generation if reset was true or dates were adjusted
-        if final_start and final_end:
-             start_render, end_render = final_start, final_end
-        # Else, stick with requested dates for form rendering
-
-        # Update station name and units if returned
+        if final_start and final_end: start_render, end_render = final_start, final_end
         if name_func and name_func != 'N/A': st_name = name_func
-        units_val = units_val or 'Unknown Units' # Ensure not None
+        units_val = units_val or 'Unknown Units'
 
-        # Handle errors returned from generate_plot_for_site
         if err_func:
-            err_msg = err_func # Assign the error message
-            # Set HTTP status based on the type of error message
+            err_msg = err_func
             if "CRITICAL ERROR" in err_msg: status = 500
             elif "API Error" in err_msg or "Network error" in err_msg: status = 502
             elif "JSON Decode Error" in err_msg or "Threshold data" in err_msg or "Unexpected" in err_msg: status = 500
             elif "Could not find or validate" in err_msg or f"SiteID {site_id} not found" in err_msg or "Error: Threshold data missing" in err_msg: status = 404
-            elif "No data" in err_msg or "No date range" in err_msg: status = 200 # No data isn't strictly an error
-            else: status = 400 # Default bad request for other handled errors
+            elif "No data" in err_msg or "No date range" in err_msg: status = 200
+            else: status = 400
             app.logger.warning(f"Error handled from generate_plot_for_site: {err_msg} (Status: {status})")
-
-        # Log success message if no error and plot generated
-        elif fig:
-             app.logger.info(f"Plot generation complete. Actual range plotted: {final_start} to {final_end}")
+        elif fig: app.logger.info(f"Plot generation complete. Actual range plotted: {final_start} to {final_end}")
 
     except Exception as e:
-        # Catch unexpected errors during the call itself
         app.logger.error(f"Unhandled exception during generate_plot_for_site call for {site_id}: {e}", exc_info=True)
         err_msg = "Unexpected server error occurred during plot generation."; status = 500
-        # Reset potentially modified variables on critical error
         start_render, end_render = start_date_req or "", end_date_req or ""
         units_val = 'Unknown Units'; current_thresholds_for_template = None; stats_dict_for_template = None
-        fig = None # Ensure fig is None
+        fig = None
 
-    # --- Convert plot to HTML if it exists ---
     if fig:
         try:
-            plot_output_id = f"plotly-plot-{uuid.uuid4()}" # Generate unique ID for the div
-            plot_div = fig.to_html(
-                full_html=False,        # Don't include <html> tags etc.
-                include_plotlyjs='cdn', # Use Plotly CDN
-                config={'displayModeBar': True, 'scrollZoom': True, 'responsive': True}, # Plotly config
-                div_id=plot_output_id   # Set the div ID
-            )
+            plot_output_id = f"plotly-plot-{uuid.uuid4()}"
+            plot_div = fig.to_html(full_html=False, include_plotlyjs='cdn', config={'displayModeBar': True, 'scrollZoom': True, 'responsive': True}, div_id=plot_output_id)
             app.logger.info(f"Plotly figure converted to HTML div (id='{plot_output_id}') for site {site_id}")
         except Exception as plot_e:
             app.logger.error(f"Error converting plot to HTML for {site_id}: {plot_e}", exc_info=True)
             err_msg = (err_msg + "; Additionally, an error occurred preparing the plot for display.") if err_msg else "Error preparing plot for display."
-            status = 500; plot_div = None; fig = None; plot_output_id = None # Reset plot variables
+            status = 500; plot_div = None; fig = None; plot_output_id = None
 
-    # --- Prepare final dates for rendering ---
-    # Use the actual dates returned by generate_plot if available, otherwise fall back
     start_final = final_start if final_start is not None else start_render if start_render is not None else ""
     end_final = final_end if final_end is not None else end_render if end_render is not None else ""
 
     app.logger.debug(f"Final Rendering Variables: status={status}, plot_id={plot_output_id}, error={err_msg is not None}")
 
-    # --- Render the final template ---
     return render_template_string(HTML_TEMPLATE,
-                                  site_id=site_id,
-                                  station_name=st_name, # Use updated name
-                                  start_date=start_final, # Use final dates
-                                  end_date=end_final,   # Use final dates
-                                  error=err_msg,
-                                  plot_div=plot_div,
-                                  units=units_val, # Use updated units
-                                  current_thresholds=current_thresholds_for_template, # Pass thresholds for editing form
-                                  stats_dict=stats_dict_for_template, # Pass stats
-                                  plot_output_id=plot_output_id # Pass the unique div ID to template's JS
+                                  site_id=site_id, station_name=st_name, start_date=start_final, end_date=end_final,
+                                  error=err_msg, plot_div=plot_div, units=units_val,
+                                  current_thresholds=current_thresholds_for_template,
+                                  stats_dict=stats_dict_for_template,
+                                  plot_output_id=plot_output_id
                                   ), status
 
 
 # --- Flask Route: Index / Root ---
 @app.route('/')
 def index():
-    # Generate default dates for the initial form display
-    today=datetime.now(); today_str=today.strftime('%Y-%m-%d')
-    month_ago=(today-timedelta(days=30)).strftime('%Y-%m-%d')
+    # (Keep route function code here - same as previous version)
+    today=datetime.now(); today_str=today.strftime('%Y-%m-%d'); month_ago=(today-timedelta(days=30)).strftime('%Y-%m-%d')
     app.logger.info("Rendering index page.")
-    # Render template with defaults, no plot or specific site info
     return render_template_string(HTML_TEMPLATE,
-                                  site_id=None,
-                                  station_name="Data Quality Analysis",
-                                  start_date=month_ago,
-                                  end_date=today_str,
-                                  error=None,
-                                  plot_div=None,
-                                  units='Unknown Units',
-                                  current_thresholds=None,
-                                  stats_dict=None,
+                                  site_id=None, station_name="Data Quality Analysis", start_date=month_ago, end_date=today_str,
+                                  error=None, plot_div=None, units='Unknown Units', current_thresholds=None, stats_dict=None,
                                   plot_output_id=None)
 
 
 # --- Main Execution Block (for local 'python main.py' execution ONLY) ---
 if __name__ == '__main__':
     # This block is NOT executed by Gunicorn in production.
-    # Essential setup (like loading thresholds) MUST be done outside this block.
-
-    # Optional: Check if thresholds loaded successfully during import for dev server startup
-    if thresholds_df_global is None:
-         print("\nFATAL ERROR: Thresholds failed to load during module import. Check logs above. Cannot start dev server.", file=sys.stderr)
-         sys.exit(1)
-    else:
-         print("\nThresholds loaded successfully during import check.", file=sys.stderr)
-
+    # The essential threshold loading now happens reliably outside this block.
+    # We just start the dev server here. We can trust the logs generated during
+    # the import/startup phase regarding threshold loading success/failure.
     app.logger.info(f"Starting Flask development server on http://127.0.0.1:5000")
     # Use Flask's built-in server for local testing and debugging
-    # Note: host='127.0.0.1' is suitable for local dev, Gunicorn needs '0.0.0.0' usually
-    app.run(host='127.0.0.1', port=5000, debug=True) # debug=True enables auto-reloading and debugger
+    # debug=True enables auto-reloading and interactive debugger (DO NOT use in production)
+    app.run(host='127.0.0.1', port=5000, debug=True)
