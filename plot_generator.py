@@ -46,6 +46,9 @@ LG_REVIEW_STATUS = 'review_status_bar_group' # Keep consistent group name for st
 
 # --- Utility Functions ---
 def validate_date(date_str: Optional[str]) -> Optional[datetime]:
+    # Use current time if available for comparison logic if needed
+    current_time_info = "Current time is Wednesday, April 23, 2025 at 12:37:28 PM MDT." # From context
+    # This utility doesn't use current time, but keeping context visible
     if not date_str: return None
     try: return datetime.strptime(date_str, '%Y-%m-%d')
     except ValueError: return None
@@ -218,8 +221,19 @@ def generate_plot_for_site(
     # 5. Add ReviewStatus column
     if not df.empty and 'Date' in df.columns: # Check df not empty again just in case
         latest_date = df['Date'].max()
-        if pd.notna(latest_date): one_year_ago = latest_date - pd.DateOffset(years=1); logger.info(f"Applying ReviewStatus: Dates > {one_year_ago.strftime('%Y-%m-%d')} marked as 'Raw'."); df['ReviewStatus'] = 'Reviewed'; df.loc[df['Date'] > one_year_ago, 'ReviewStatus'] = 'Raw'; logger.info(f"ReviewStatus Counts: Reviewed={(df['ReviewStatus'] == 'Reviewed').sum()}, Raw={(df['ReviewStatus'] == 'Raw').sum()}")
-        else: logger.warning("Could not determine latest date. Defaulting ReviewStatus to 'Reviewed'."); df['ReviewStatus'] = 'Reviewed'
+        # Use current_time from context if needed here, e.g., for the one_year_ago logic
+        # current_dt = datetime(2025, 4, 23, 12, 37, 28) # Example parsing from context
+        if pd.notna(latest_date):
+             # Define the one_year_ago based on the latest data point, as before.
+             # The example text about "last year" is just explanatory text for the legend.
+             one_year_ago = latest_date - pd.DateOffset(years=1)
+             logger.info(f"Applying ReviewStatus: Dates > {one_year_ago.strftime('%Y-%m-%d')} marked as 'Raw'.")
+             df['ReviewStatus'] = 'Reviewed'
+             df.loc[df['Date'] > one_year_ago, 'ReviewStatus'] = 'Raw'
+             logger.info(f"ReviewStatus Counts: Reviewed={(df['ReviewStatus'] == 'Reviewed').sum()}, Raw={(df['ReviewStatus'] == 'Raw').sum()}")
+        else:
+             logger.warning("Could not determine latest date. Defaulting ReviewStatus to 'Reviewed'.")
+             df['ReviewStatus'] = 'Reviewed'
     else: logger.warning("DataFrame empty or 'Date' missing. Skipping ReviewStatus.");
     if not df.empty and 'ReviewStatus' not in df.columns: df['ReviewStatus'] = 'Unknown'
 
@@ -295,12 +309,11 @@ def generate_plot_for_site(
     min_val_thresh = site_thresholds.get("min_val", float('nan')); max_val_thresh = site_thresholds.get("max_val", float('nan')); spike_unusual_thresh = site_thresholds.get("spike_unusual", float('nan'))
     repeated_thresh_val = site_thresholds.get("repeated_values_threshold", DEFAULT_REPEATED_THRESHOLD)
     fmt_spike = f"{spike_unusual_thresh:.2f}" if pd.notna(spike_unusual_thresh) else "N/A"; fmt_max = f"{max_val_thresh:.2f}" if pd.notna(max_val_thresh) else "N/A"; fmt_min = f"{min_val_thresh:.2f}" if pd.notna(min_val_thresh) else "N/A"
-    # *** CHANGE 3: Update flag label ***
     flag_plot_info = {
         'FLAG_BELOW_CAPACITY': ('red', 'Flag: Below Capacity (< 0)'),
         'FLAG_ZERO': ('blue', 'Flag: Zero Discharge'),
         'FLAG_REPEATED': ('green', f'Flag: Repeated Value (>{repeated_thresh_val} readings)'),
-        'FLAG_GREATER_THAN_MaxValue': ('purple', f'Flag: Over Estimated Capacity ({fmt_max})'), # <-- Changed here
+        'FLAG_GREATER_THAN_MaxValue': ('purple', f'Flag: Over Estimated Capacity ({fmt_max})'),
         'UNUSUAL_SPIKE': ('orange', f'Flag: Unusual Spike (Change > {fmt_spike})'),
         'FLAG_LESS_THAN_Min._Value': ('darkred', f'Flag: Below Min Threshold ({fmt_min}, >0)')
     }
@@ -372,11 +385,13 @@ def generate_plot_for_site(
 
     # --- 4. Add Dummy Trace for "Data Quality Status" Header ---
     logger.debug("Adding dummy trace for 'Data Quality Status' legend header")
+    # *** Update dummy trace name with italic subtext ***
+    status_header_text = "<b>Data Quality Status</b><br><i>Review status 'raw' is set for the last year</b> as an example</i>"
     fig.add_trace(go.Scatter(
         mode='markers', # Needs a mode, markers is fine
         x=[None], y=[None], # No actual data point
         marker=dict(opacity=0), # Make the marker invisible
-        name='<b>Data Quality Status</b>', # The header text
+        name=status_header_text, # <-- Use the multi-line HTML formatted name
         showlegend=True,
         legendgroup=LG_REVIEW_STATUS # Group with the bars that follow
     ))
@@ -431,7 +446,6 @@ def generate_plot_for_site(
     progress_bar_height = 0.1; main_plot_bottom_margin = progress_bar_height + 0.1
 
     # --- Legend Configuration ---
-    # *** CHANGE 1 & 2 modification: Update legend title text formatting ***
     legend_main_title = "<b>Data Quality Flags</b><br><i>Qualified data is set for Sept as an example</i><br>" # Italic, no parens, extra <br> for space
 
     fig.update_layout(
@@ -444,7 +458,6 @@ def generate_plot_for_site(
             yanchor="top", y=0.98, xanchor="left", x=1.01,
             bgcolor="rgba(255,255,255,0.8)", bordercolor="LightGrey", borderwidth=1,
             font_size=22, # Font size for legend items
-            # *** CHANGE 4: Re-enable tracegroupgap for space ***
             tracegroupgap=25, # Add space between legend groups (Thresholds -> Review Status)
             title=dict(
                 text=legend_main_title, # Only the main title section here
