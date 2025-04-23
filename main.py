@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # --- Imports ---
-from flask import Flask, render_template_string, request, redirect, url_for, flash, jsonify
+from flask import Flask, render_template_string, request, redirect, url_for, flash, jsonify, get_flashed_messages # Added get_flashed_messages
 import logging
 import os
 import sys
@@ -47,96 +47,25 @@ logger = logging.getLogger('main_app') # Use a specific logger name
 
 # --- Flask App Setup ---
 app = Flask(__name__)
-# Consider setting a secret key if using flash messages or sessions
-# app.secret_key = os.urandom(24)
-
-# --- Load Thresholds at Startup with Diagnostics ---
-logger.info("=" * 20 + " APPLICATION STARTUP " + "=" * 20)
-try:
-    logger.info("-" * 10 + " Running Startup Diagnostics for Threshold File " + "-" * 10)
-    logger.info(f"Using threshold path constant: {THRESHOLDS_CSV_PATH}")
-    logger.info(f"Path object type: {type(THRESHOLDS_CSV_PATH)}")
-
-    if isinstance(THRESHOLDS_CSV_PATH, Path):
-         path_str = str(THRESHOLDS_CSV_PATH)
-         logger.info(f"Checking existence of resolved path: {path_str}")
-         exists = os.path.exists(path_str)
-         logger.info(f"Path exists (os.path.exists): {exists}")
-         if exists:
-              is_file = os.path.isfile(path_str)
-              logger.info(f"Is file (os.path.isfile): {is_file}")
-              if is_file:
-                  # Crucial check: Can the *current running process* read it?
-                  can_read = os.access(path_str, os.R_OK)
-                  logger.info(f"Read access granted (os.access): {can_read}")
-                  if not can_read:
-                      logger.error("PERMISSION DENIED: Read access check failed for the threshold file path!")
-              else:
-                   logger.error("PATH IS NOT A FILE: The specified path exists but is not a file.")
-         else:
-              logger.error("PATH NOT FOUND: The specified threshold file path does not exist.")
-    else:
-         logger.error("CONFIGURATION ERROR: THRESHOLDS_CSV_PATH imported from threshold_manager is not a valid Path object!")
-
-    logger.info("-" * 10 + " Attempting to Call load_thresholds " + "-" * 10)
-
-    # --- Call the actual load_thresholds function ---
-    # Pass the logger instance you configured above
-    loaded_df = load_thresholds(THRESHOLDS_CSV_PATH, logger)
-    # -----------------------------------------------
-
-    logger.info("-" * 10 + " Result of load_thresholds Call " + "-" * 10)
-    if loaded_df is None:
-        logger.error("load_thresholds returned None. Check previous logs for loading errors (permissions, file format, missing columns etc.).")
-        # Consider adding a flag or state here if needed by your app logic
-        # to know that thresholds failed to load.
-    elif loaded_df.empty:
-        logger.warning("load_thresholds returned an EMPTY DataFrame. The file might exist and be readable but contain no data rows.")
-    else:
-        logger.info(f"load_thresholds returned a DataFrame successfully. Shape: {loaded_df.shape}")
-        # Optional: Log columns if needed for debugging
-        # logger.debug(f"Loaded columns: {loaded_df.columns.tolist()}")
-    logger.info("-" * 60)
-
-except Exception as startup_err:
-    logger.error(f"UNEXPECTED ERROR DURING STARTUP THRESHOLD LOADING/DIAGNOSTICS: {startup_err}", exc_info=True)
-    logger.info("-" * 60)
-    # Depending on severity, you might want to exit or prevent the app from fully starting:
-    # sys.exit("Critical error during threshold loading.")
-
-logger.info("=" * 20 + " STARTUP COMPLETE (ROUTES NEXT) " + "=" * 20)
-
-
-
-
-# --- Flask App Setup ---
-app = Flask(__name__)
-
 # Configure logging BEFORE using app.logger
-# Basic config for root logger (might be overridden by GCP logging)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-# Set Flask app logger level
-app.logger.setLevel(logging.INFO)
+app.logger.setLevel(logging.INFO) # Use Flask's logger instance
 
 # Secret key for flash messages
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24)) # Good practice to use env var or generate random
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24))
 
 # --- Log fcntl status ---
-# Use app.logger now that it's configured
-if not HAS_FCNTL:
-    app.logger.warning("fcntl not available. File locking disabled. This might cause issues if multiple instances write thresholds simultaneously.")
-else:
-    app.logger.info("fcntl available. File locking enabled.")
+if not HAS_FCNTL: app.logger.warning("fcntl not available. File locking disabled.")
+else: app.logger.info("fcntl available. File locking enabled.")
 
-# --- Load Thresholds AT STARTUP ---  <<<<<<<<< CORRECT LOCATION
-# This code now runs when Gunicorn imports the module OR when executed directly
+# --- Load Thresholds AT STARTUP ---
 app.logger.info(f"Attempting initial threshold load from: {THRESHOLDS_CSV_PATH}")
+# The load_thresholds function now directly updates the global in threshold_manager
 if load_thresholds(THRESHOLDS_CSV_PATH, app.logger) is None:
-    # Log critical error, but allow app to potentially start to show the error message in the route
-    app.logger.critical(f"CRITICAL STARTUP FAILURE: Initial threshold load failed from '{THRESHOLDS_CSV_PATH}'. Check file existence, path, permissions, and format in logs.")
+    app.logger.critical(f"CRITICAL STARTUP FAILURE: Initial threshold load failed from '{THRESHOLDS_CSV_PATH}'. Check logs.")
 else:
-    app.logger.info("Initial threshold load successful.")
+    app.logger.info("Initial threshold load attempt complete (check logs for success/failure).")
 # --- END Load Thresholds AT STARTUP ---
+
 
 # --- HTML Template Definition ---
 # Ensure the triple quotes below correctly enclose the entire HTML string
@@ -195,20 +124,20 @@ HTML_TEMPLATE = """
         @media (max-width: 480px) { body { margin: 10px; font-size: 90%; } h1 { font-size: 1.4em; } .header-link, .header-text-no-link { font-size: 0.95em; } .controls label { font-size: 0.9em; } .controls input, .controls button { font-size: 0.9em; } .modal { width: 90%; } .modal-button { font-size: 12px; padding: 5px 10px; } }
     </style>
 </head>
-<body>
+    <body>
+    <h3 style="color: red;">Disclaimer: this app is for internal use, testing, and demonstration purposes</h3>
     <h1>
         <span style="font-size: 0.8em; display: block; font-weight: normal; color: #7f8c8d;">Data Quality Analysis for Measurement Site</span>
         {% if site_id and site_id != 'N/A' and site_id is not none %}
             <a href="https://waterrights.utah.gov/cgi-bin/dvrtview.exe?Modinfo=StationView&STATION_ID={{ site_id }}" target="_blank" rel="noopener noreferrer" class="header-link">
-                 {% if units and units != 'Unknown Units' %}{{ units }} - {% endif %}{{ station_name | default('Unknown Station', true) }} (Site ID={{ site_id }})
+                {% if units and units != 'Unknown Units' %}{{ units }} - {% endif %}{{ station_name | default('Unknown Station', true) }} (Site ID={{ site_id }})
             </a>
         {% else %}
             <span class="header-text-no-link">
-                 {% if units and units != 'Unknown Units' %}{{ units }} - {% endif %}{{ station_name | default('Unknown Station', true) }} (Site ID={{ site_id | default('N/A', true) }})
+                {% if units and units != 'Unknown Units' %}{{ units }} - {% endif %}{{ station_name | default('Unknown Station', true) }} (Site ID={{ site_id | default('N/A', true) }})
             </span>
         {% endif %}
     </h1>
-
     {# --- Display Flash Messages --- #}
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -261,8 +190,8 @@ HTML_TEMPLATE = """
                          <small>({{ units if units != 'Unknown Units' else 'units' }}/day)</small>
                    </div>
                     <div>
-                        <label for="repeated_days">Repeated Value Days:</label>
-                        <input type="number" step="1" min="2" id="repeated_days" name="repeated_days" value="{{ current_thresholds.repeated_days }}" required>
+                        <label for="repeated_values_threshold">Repeated Value Days:</label> {# Changed label 'for' #}
+                        <input type="number" step="1" min="2" id="repeated_values_threshold" name="repeated_values_threshold" value="{{ current_thresholds.repeated_values_threshold }}" required> {# Changed id, name, value #}
                         <small>(days, min 2)</small>
                     </div>
                     <input type="submit" value="Update Thresholds">
@@ -370,35 +299,46 @@ HTML_TEMPLATE = """
 # --- Flask Route: Update Thresholds ---
 @app.route('/update_thresholds', methods=['POST'])
 def update_thresholds():
-    # (Keep route function code here - same as previous version)
     site_id = request.form.get('site_id')
     start_date = request.form.get('start_date')
     end_date = request.form.get('end_date')
     if not site_id:
         flash("Error: Site ID missing for update.", "error")
-        return redirect(url_for('index')) # Redirect to index if no site ID
+        return redirect(url_for('index'))
+
     try:
-        new_vals = {
-            'max_val': float(request.form['max_val']),
-            'spike_unusual': float(request.form['spike_unusual']),
-            'repeated_days': int(request.form['repeated_days'])
-        }
-        if new_vals['repeated_days'] < 2:
+        # --- UPDATED: Read form using new name and build dict with correct keys ---
+        max_val_f = float(request.form['max_val'])
+        spike_unusual_f = float(request.form['spike_unusual'])
+        # Use the new name from the form
+        repeated_val_i = int(request.form['repeated_values_threshold'])
+
+        # Validate repeated value threshold
+        if repeated_val_i < 2:
             flash("Error: 'Repeated Value Days' must be 2 or greater.", "error")
-            raise ValueError("Repeated days threshold must be >= 2")
-        if new_vals['max_val'] < 0 or new_vals['spike_unusual'] < 0:
+            raise ValueError("Repeated values threshold must be >= 2")
+        # Validate other thresholds
+        if max_val_f < 0 or spike_unusual_f < 0:
             flash("Error: Threshold values cannot be negative.", "error")
             raise ValueError("Negative threshold value provided")
 
+        # Build the dictionary with keys expected by update_threshold_in_csv
+        new_vals = {
+            'max_val': max_val_f,
+            'spike_unusual': spike_unusual_f,
+            'repeated_values_threshold': repeated_val_i # Use the key from get_site_thresholds
+        }
+        # --- END UPDATE ---
+
     except (ValueError, TypeError, KeyError) as e:
         app.logger.error(f"Invalid threshold format/value submitted for SiteID {site_id}: {e}")
-        # Avoid duplicate flashing
-        existing_flashes = [m[1] for m in get_flashed_messages(with_categories=True)]
-        if 'error' not in existing_flashes:
-             flash("Error: Invalid number format or missing value for thresholds.", "error")
+        # Avoid duplicate flashing if validation already flashed
+        if not any(cat == 'error' for cat, msg in get_flashed_messages(with_categories=True)):
+            flash("Error: Invalid number format or missing value for thresholds.", "error")
         return redirect(url_for('show_plot', id=site_id, start_date=start_date, end_date=end_date))
 
     app.logger.info(f"Attempting to update thresholds for SiteID {site_id} with values: {new_vals}")
+    # Pass the correctly keyed new_vals dict
     success, message = update_threshold_in_csv(site_id, new_vals, app.logger)
     flash(message, "success" if success else "error")
     return redirect(url_for('show_plot', id=site_id, start_date=start_date, end_date=end_date))
@@ -407,7 +347,7 @@ def update_thresholds():
 # --- Flask Route: Show Plot ---
 @app.route('/plot')
 def show_plot():
-    # (Keep route function code here - same as previous version)
+    # (This route function remains largely the same as previous working version)
     site_id = request.args.get('id')
     start_date_req = request.args.get('start_date')
     end_date_req = request.args.get('end_date')
@@ -433,14 +373,12 @@ def show_plot():
 
     start_proc, end_proc = None, None
     if is_reset or not start_date_req or not end_date_req:
-        if not is_reset: app.logger.info(f"Site '{site_id}' missing date range in request. Resetting to full range.")
-        else: app.logger.info(f"Reset requested for Site '{site_id}'. Using full range.")
-        is_reset = True
-        start_render, end_render = None, None
+        if not is_reset: app.logger.info(f"Site '{site_id}' missing date range. Resetting.")
+        else: app.logger.info(f"Reset requested for Site '{site_id}'.")
+        is_reset = True; start_render, end_render = None, None
     else:
-        start_proc, end_proc = start_date_req, end_date_req
-        start_render, end_render = start_proc, end_proc
-        app.logger.info(f"Using requested date range for processing: {start_proc} to {end_proc}")
+        start_proc, end_proc = start_date_req, end_date_req; start_render, end_render = start_proc, end_proc
+        app.logger.info(f"Using requested date range: {start_proc} to {end_proc}")
 
     app.logger.info(f"Calling generate_plot_for_site: id={site_id}, start={start_proc}, end={end_proc}, reset={is_reset}")
     try:
@@ -454,12 +392,12 @@ def show_plot():
 
         if err_func:
             err_msg = err_func
-            if "CRITICAL ERROR" in err_msg: status = 500
-            elif "API Error" in err_msg or "Network error" in err_msg: status = 502
-            elif "JSON Decode Error" in err_msg or "Threshold data" in err_msg or "Unexpected" in err_msg: status = 500
-            elif "Could not find or validate" in err_msg or f"SiteID {site_id} not found" in err_msg or "Error: Threshold data missing" in err_msg: status = 404
-            elif "No data" in err_msg or "No date range" in err_msg: status = 200
-            else: status = 400
+            if "CRITICAL ERROR" in err_msg or "Threshold load attempt FAILED" in err_msg: status = 500
+            elif "API Error" in err_msg or "Network error" in err_msg or "timed out" in err_msg: status = 502
+            elif "JSON Decode Error" in err_msg or "Unexpected" in err_msg: status = 500
+            elif f"SiteID {site_id} not found" in err_msg or "Threshold data missing" in err_msg: status = 404
+            elif "No data" in err_msg or "No date range" in err_msg: status = 200 # No data is not really an "error"
+            else: status = 400 # Generic client/request error if no better fit
             app.logger.warning(f"Error handled from generate_plot_for_site: {err_msg} (Status: {status})")
         elif fig: app.logger.info(f"Plot generation complete. Actual range plotted: {final_start} to {final_end}")
 
@@ -467,8 +405,7 @@ def show_plot():
         app.logger.error(f"Unhandled exception during generate_plot_for_site call for {site_id}: {e}", exc_info=True)
         err_msg = "Unexpected server error occurred during plot generation."; status = 500
         start_render, end_render = start_date_req or "", end_date_req or ""
-        units_val = 'Unknown Units'; current_thresholds_for_template = None; stats_dict_for_template = None
-        fig = None
+        units_val = 'Unknown Units'; current_thresholds_for_template = None; stats_dict_for_template = None; fig = None
 
     if fig:
         try:
@@ -477,7 +414,7 @@ def show_plot():
             app.logger.info(f"Plotly figure converted to HTML div (id='{plot_output_id}') for site {site_id}")
         except Exception as plot_e:
             app.logger.error(f"Error converting plot to HTML for {site_id}: {plot_e}", exc_info=True)
-            err_msg = (err_msg + "; Additionally, an error occurred preparing the plot for display.") if err_msg else "Error preparing plot for display."
+            err_msg = (err_msg + "; Additionally, error preparing plot for display.") if err_msg else "Error preparing plot for display."
             status = 500; plot_div = None; fig = None; plot_output_id = None
 
     start_final = final_start if final_start is not None else start_render if start_render is not None else ""
@@ -497,7 +434,7 @@ def show_plot():
 # --- Flask Route: Index / Root ---
 @app.route('/')
 def index():
-    # (Keep route function code here - same as previous version)
+    # (Unchanged)
     today=datetime.now(); today_str=today.strftime('%Y-%m-%d'); month_ago=(today-timedelta(days=30)).strftime('%Y-%m-%d')
     app.logger.info("Rendering index page.")
     return render_template_string(HTML_TEMPLATE,
@@ -506,13 +443,7 @@ def index():
                                   plot_output_id=None)
 
 
-# --- Main Execution Block (for local 'python main.py' execution ONLY) ---
+# --- Main Execution Block ---
 if __name__ == '__main__':
-    # This block is NOT executed by Gunicorn in production.
-    # The essential threshold loading now happens reliably outside this block.
-    # We just start the dev server here. We can trust the logs generated during
-    # the import/startup phase regarding threshold loading success/failure.
     app.logger.info(f"Starting Flask development server on http://127.0.0.1:5000")
-    # Use Flask's built-in server for local testing and debugging
-    # debug=True enables auto-reloading and interactive debugger (DO NOT use in production)
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    app.run(host='127.0.0.1', port=5000, debug=True) # Use reloader for development
