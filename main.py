@@ -1,28 +1,113 @@
 # -*- coding: utf-8 -*-
 # --- Imports ---
-from flask import Flask, render_template_string, request, redirect, url_for, flash, jsonify # Removed session as it wasn't used
+from flask import Flask, render_template_string, request, redirect, url_for, flash, jsonify
 import logging
 import os
 import sys
 from datetime import datetime, timedelta
 import uuid # For unique plot IDs
+from pathlib import Path # <--- Added import
 
-# --- Import functions from data_handler ---
-# Ensure data_handler.py is in the same directory
+# --- Import functions from threshold_manager and plot_generator ---
+# Ensure threshold_manager.py and plot_generator.py are in the same directory or Python path
+
+# Import threshold-related functions and constants
 try:
-    from data_handler import (
-        load_thresholds,
-        generate_plot_for_site,
-        update_threshold_in_csv,
-        THRESHOLDS_CSV_PATH, # Import path constant
-        HAS_FCNTL, # Import check result
-        # No need to import thresholds_df_global here anymore
+    from threshold_manager import (
+        load_thresholds,          # Function to load/reload thresholds
+        update_threshold_in_csv,  # Function to update thresholds in the CSV
+        THRESHOLDS_CSV_PATH,      # Path constant for the thresholds file
+        HAS_FCNTL                 # Boolean indicating if file locking is available
     )
+    print("INFO: Successfully imported from threshold_manager.py", file=sys.stderr)
 except ImportError as e:
-    # Log critical error and exit if essential handler code cannot be imported
-    print(f"FATAL ERROR: Could not import from data_handler.py. Ensure it exists in the same directory.", file=sys.stderr)
+    # Log critical error and exit if essential threshold code cannot be imported
+    print(f"FATAL ERROR: Could not import required items from threshold_manager.py. Ensure it exists and is accessible.", file=sys.stderr)
     print(f"Error details: {e}", file=sys.stderr)
     sys.exit(1)
+
+# Import plot generation function
+try:
+    from plot_generator import (
+        generate_plot_for_site   # The main function to create the plot
+    )
+    print("INFO: Successfully imported from plot_generator.py", file=sys.stderr)
+except ImportError as e:
+    # Log critical error and exit if essential plot code cannot be imported
+    print(f"FATAL ERROR: Could not import required items from plot_generator.py. Ensure it exists and is accessible.", file=sys.stderr)
+    print(f"Error details: {e}", file=sys.stderr)
+    sys.exit(1)
+
+# --- Basic Logging Setup (Configure as needed) ---
+# You might have more sophisticated logging already, adjust accordingly
+logging.basicConfig(level=logging.INFO, # Use DEBUG for more verbose logs if needed
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler(sys.stderr)]) # Log to stderr
+logger = logging.getLogger('main_app') # Use a specific logger name
+
+# --- Flask App Setup ---
+app = Flask(__name__)
+# Consider setting a secret key if using flash messages or sessions
+# app.secret_key = os.urandom(24)
+
+# --- Load Thresholds at Startup with Diagnostics ---
+logger.info("=" * 20 + " APPLICATION STARTUP " + "=" * 20)
+try:
+    logger.info("-" * 10 + " Running Startup Diagnostics for Threshold File " + "-" * 10)
+    logger.info(f"Using threshold path constant: {THRESHOLDS_CSV_PATH}")
+    logger.info(f"Path object type: {type(THRESHOLDS_CSV_PATH)}")
+
+    if isinstance(THRESHOLDS_CSV_PATH, Path):
+         path_str = str(THRESHOLDS_CSV_PATH)
+         logger.info(f"Checking existence of resolved path: {path_str}")
+         exists = os.path.exists(path_str)
+         logger.info(f"Path exists (os.path.exists): {exists}")
+         if exists:
+              is_file = os.path.isfile(path_str)
+              logger.info(f"Is file (os.path.isfile): {is_file}")
+              if is_file:
+                  # Crucial check: Can the *current running process* read it?
+                  can_read = os.access(path_str, os.R_OK)
+                  logger.info(f"Read access granted (os.access): {can_read}")
+                  if not can_read:
+                      logger.error("PERMISSION DENIED: Read access check failed for the threshold file path!")
+              else:
+                   logger.error("PATH IS NOT A FILE: The specified path exists but is not a file.")
+         else:
+              logger.error("PATH NOT FOUND: The specified threshold file path does not exist.")
+    else:
+         logger.error("CONFIGURATION ERROR: THRESHOLDS_CSV_PATH imported from threshold_manager is not a valid Path object!")
+
+    logger.info("-" * 10 + " Attempting to Call load_thresholds " + "-" * 10)
+
+    # --- Call the actual load_thresholds function ---
+    # Pass the logger instance you configured above
+    loaded_df = load_thresholds(THRESHOLDS_CSV_PATH, logger)
+    # -----------------------------------------------
+
+    logger.info("-" * 10 + " Result of load_thresholds Call " + "-" * 10)
+    if loaded_df is None:
+        logger.error("load_thresholds returned None. Check previous logs for loading errors (permissions, file format, missing columns etc.).")
+        # Consider adding a flag or state here if needed by your app logic
+        # to know that thresholds failed to load.
+    elif loaded_df.empty:
+        logger.warning("load_thresholds returned an EMPTY DataFrame. The file might exist and be readable but contain no data rows.")
+    else:
+        logger.info(f"load_thresholds returned a DataFrame successfully. Shape: {loaded_df.shape}")
+        # Optional: Log columns if needed for debugging
+        # logger.debug(f"Loaded columns: {loaded_df.columns.tolist()}")
+    logger.info("-" * 60)
+
+except Exception as startup_err:
+    logger.error(f"UNEXPECTED ERROR DURING STARTUP THRESHOLD LOADING/DIAGNOSTICS: {startup_err}", exc_info=True)
+    logger.info("-" * 60)
+    # Depending on severity, you might want to exit or prevent the app from fully starting:
+    # sys.exit("Critical error during threshold loading.")
+
+logger.info("=" * 20 + " STARTUP COMPLETE (ROUTES NEXT) " + "=" * 20)
+
+
+
 
 # --- Flask App Setup ---
 app = Flask(__name__)
