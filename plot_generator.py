@@ -1,4 +1,3 @@
-# plot_generator.py
 # -*- coding: utf-8 -*-
 # --- Imports ---
 import requests
@@ -23,12 +22,12 @@ try:
         DEFAULT_REPEATED_THRESHOLD
     )
 except ImportError as e:
-     print(f"FATAL ERROR: Could not import from threshold_manager.py. Error: {e}", file=sys.stderr)
-     def get_site_thresholds(site_id, logger): logger.error("threshold_manager import failed"); return None
-     def load_thresholds(path, logger): logger.error("threshold_manager import failed"); return None
-     thresholds_df_global = None
-     THRESHOLDS_CSV_PATH = "thresholds.csv"
-     DEFAULT_REPEATED_THRESHOLD = 4
+      print(f"FATAL ERROR: Could not import from threshold_manager.py. Error: {e}", file=sys.stderr)
+      def get_site_thresholds(site_id, logger): logger.error("threshold_manager import failed"); return None
+      def load_thresholds(path, logger): logger.error("threshold_manager import failed"); return None
+      thresholds_df_global = None
+      THRESHOLDS_CSV_PATH = "thresholds.csv"
+      DEFAULT_REPEATED_THRESHOLD = 4
 
 
 # --- Constants for Plotting ---
@@ -37,6 +36,13 @@ BUFFER_START_COLOR_RGBA = (128, 0, 128, 0.2); BUFFER_END_COLOR_RGBA = (128, 0, 1
 REVIEW_BAR_COLORS = {'Reviewed': 'green', 'Raw': 'blue', 'Unknown': 'orange'}
 COLOR_NORMAL = 'lightgray'; COLOR_QUALIFIED = 'red'; COLOR_UNKNOWN = 'orange'
 REVIEW_BAR_Y_VALUE = 1; PROGRESS_BAR_TEXT_SIZE = 20
+
+# Define legend groups
+LG_DISCHARGE = 'discharge_group'
+LG_FLAGS = 'flags_group'
+LG_THRESHOLDS = 'thresholds_group'
+LG_REVIEW_STATUS = 'review_status_bar_group' # Keep consistent group name for status items
+
 
 # --- Utility Functions ---
 def validate_date(date_str: Optional[str]) -> Optional[datetime]:
@@ -54,9 +60,10 @@ def add_gradient_buffer(fig, dates, mean_value, buffer, start_color, end_color, 
     for i in range(num_bands - 1, -1, -1):
         outer_f=(i+1)/num_bands; inner_f=i/num_bands; band_color=interpolate_color(start_color, end_color, outer_f)
         y_low_u=mean_value+inner_f*buffer; y_high_u=mean_value+outer_f*buffer
-        if np.isfinite(y_low_u) and np.isfinite(y_high_u): y_upper = [y_low_u]*n + [y_high_u]*n; fig.add_trace(go.Scatter(x=x_poly, y=y_upper, fill='toself', fillcolor=band_color, line=dict(width=0), hoverinfo="skip", showlegend=False, mode='lines'))
+        # Make sure to pass legendgroup=None or specific group if buffer should be legend'd
+        if np.isfinite(y_low_u) and np.isfinite(y_high_u): y_upper = [y_low_u]*n + [y_high_u]*n; fig.add_trace(go.Scatter(x=x_poly, y=y_upper, fill='toself', fillcolor=band_color, line=dict(width=0), hoverinfo="skip", showlegend=False, mode='lines', legendgroup=LG_THRESHOLDS)) # Assign group if needed
         y_high_l=mean_value-inner_f*buffer; y_low_l=mean_value-outer_f*buffer
-        if np.isfinite(y_high_l) and np.isfinite(y_low_l): y_lower = [y_low_l]*n + [y_high_l]*n; fig.add_trace(go.Scatter(x=x_poly, y=y_lower, fill='toself', fillcolor=band_color, line=dict(width=0), hoverinfo="skip", showlegend=False, mode='lines'))
+        if np.isfinite(y_high_l) and np.isfinite(y_low_l): y_lower = [y_low_l]*n + [y_high_l]*n; fig.add_trace(go.Scatter(x=x_poly, y=y_lower, fill='toself', fillcolor=band_color, line=dict(width=0), hoverinfo="skip", showlegend=False, mode='lines', legendgroup=LG_THRESHOLDS)) # Assign group if needed
 
 # --- Data Flagging Function ---
 def apply_flagging(df: pd.DataFrame, thresholds: Dict[str, Any], logger: logging.Logger) -> pd.DataFrame:
@@ -92,8 +99,8 @@ def apply_flagging(df: pd.DataFrame, thresholds: Dict[str, Any], logger: logging
     else: df_processed['FLAGGED'] = False
     num_flagged = df_processed['FLAGGED'].sum(); logger.info(f"Flagging complete. Total flagged: {num_flagged}")
     for flag in existing_flags:
-         count = df_processed[flag].sum()
-         if count > 0: logger.debug(f" - {flag}: {count} points")
+          count = df_processed[flag].sum()
+          if count > 0: logger.debug(f" - {flag}: {count} points")
     return df_processed
 
 
@@ -124,9 +131,9 @@ def generate_plot_for_site(
         logger.warning("Global thresholds not loaded or empty. Attempting load now...")
         loaded_df_in_context = load_thresholds(THRESHOLDS_CSV_PATH, logger)
         if loaded_df_in_context is None or loaded_df_in_context.empty:
-             err = (f"CRITICAL ERROR: Threshold load attempt FAILED. File '{THRESHOLDS_CSV_PATH}' could not be loaded or is empty. Cannot process site data.")
-             logger.error(f"{err} (SiteID: {site_id})"); logger.error(f"Global state after failed load attempt: {'None' if thresholds_df_global is None else ('Empty' if thresholds_df_global.empty else 'Not None/Empty?')}")
-             return None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
+              err = (f"CRITICAL ERROR: Threshold load attempt FAILED. File '{THRESHOLDS_CSV_PATH}' could not be loaded or is empty. Cannot process site data.")
+              logger.error(f"{err} (SiteID: {site_id})"); logger.error(f"Global state after failed load attempt: {'None' if thresholds_df_global is None else ('Empty' if thresholds_df_global.empty else 'Not None/Empty?')}")
+              return None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
         else: logger.info("Successfully loaded thresholds within plot function context.")
 
     # 1. Get Site-Specific Thresholds
@@ -194,10 +201,10 @@ def generate_plot_for_site(
 
     logger.info(f"Processing {len(df)} points after date filtering.")
 
-    # --- Initialize Qualifiers Column --- >> MOVED HERE <<
+    # --- Initialize Qualifiers Column ---
     df['Qualifiers'] = pd.Series(dtype='object')
 
-    # --- Apply Specific Qualifiers for September --- >> MOVED HERE <<
+    # --- Apply Specific Qualifiers for September ---
     now_dt = datetime.now(); qualifier_datetime_str = now_dt.strftime('%Y-%m-%d %H:%M')
     september_qualifier = {"Qualifier#1": "Qualifier-Edits Introduced", "Person": "Adel Abdallah", "DateTime": qualifier_datetime_str}
     september_mask = df['Date'].dt.month == 9; num_sept_rows = september_mask.sum()
@@ -208,7 +215,7 @@ def generate_plot_for_site(
         logger.info("September qualifiers applied.")
     else: logger.info("No data points found in September. No qualifiers applied.")
 
-    # 5. Add ReviewStatus column >> MOVED HERE <<
+    # 5. Add ReviewStatus column
     if not df.empty and 'Date' in df.columns: # Check df not empty again just in case
         latest_date = df['Date'].max()
         if pd.notna(latest_date): one_year_ago = latest_date - pd.DateOffset(years=1); logger.info(f"Applying ReviewStatus: Dates > {one_year_ago.strftime('%Y-%m-%d')} marked as 'Raw'."); df['ReviewStatus'] = 'Reviewed'; df.loc[df['Date'] > one_year_ago, 'ReviewStatus'] = 'Raw'; logger.info(f"ReviewStatus Counts: Reviewed={(df['ReviewStatus'] == 'Reviewed').sum()}, Raw={(df['ReviewStatus'] == 'Raw').sum()}")
@@ -216,10 +223,10 @@ def generate_plot_for_site(
     else: logger.warning("DataFrame empty or 'Date' missing. Skipping ReviewStatus.");
     if not df.empty and 'ReviewStatus' not in df.columns: df['ReviewStatus'] = 'Unknown'
 
-    # 6. Apply Flagging Logic >> MOVED HERE <<
+    # 6. Apply Flagging Logic
     df = apply_flagging(df, site_thresholds, logger)
 
-    # --- Prepare Hover Text for Main Discharge Lines --- >> MOVED HERE <<
+    # --- Prepare Hover Text for Main Discharge Lines ---
     logger.debug("Preparing hover text for discharge lines...")
     def format_qualifier_hover(q_dict):
         if not isinstance(q_dict, dict) or not q_dict: return ""
@@ -229,7 +236,7 @@ def generate_plot_for_site(
     qualifier_hover_series = df['Qualifiers'].apply(format_qualifier_hover)
     df['line_hovertext'] = base_hover_series + qualifier_hover_series + ""
 
-    # --- Prepare Data for Segmented Line Plotting --- >> MOVED HERE <<
+    # --- Prepare Data for Segmented Line Plotting ---
     logger.debug("Preparing data segments for discharge lines...")
     df['HasQualifier'] = df['Qualifiers'].notna()
     mask_rev_noqual = (df['ReviewStatus'] == 'Reviewed') & (~df['HasQualifier']); mask_rev_qual = (df['ReviewStatus'] == 'Reviewed') & (df['HasQualifier'])
@@ -239,50 +246,113 @@ def generate_plot_for_site(
     df['D_Raw_NoQual'] = df['DISCHARGE'].where(mask_raw_noqual); df['D_Raw_Qual'] = df['DISCHARGE'].where(mask_raw_qual)
     df['D_Unknown'] = df['DISCHARGE'].where(mask_unknown)
 
-    # 7. Create Plot Figure >> MOVED HERE <<
+    # 7. Create Plot Figure
     logger.info("Creating Plotly figure...")
     plot_title = f"Data from {actual_start_date_str} to {actual_end_date_str}"
     fig = go.Figure()
 
-    # --- Add Segmented Discharge Line Traces ---
-    # (Now uses the prepared df columns)
+    # --- Define Trace Order Here ---
+    # 1. Discharge Lines
+    # 2. Flagged Points
+    # 3. Threshold Lines (Min, then Max)
+    # 4. Dummy Header for Status
+    # 5. Status Bars
+
+    # --- 1. Add Segmented Discharge Line Traces ---
     logger.debug("Adding segmented discharge line traces...")
-    fig.add_trace(go.Scatter(x=df['Date'], y=df['D_Rev_NoQual'], mode='lines', name='Discharge', line=dict(color=COLOR_NORMAL, width=1.5), connectgaps=False, legendgroup='discharge_normal', showlegend=True, hovertext=df['line_hovertext'], hoverinfo='text'))
-    fig.add_trace(go.Scatter(x=df['Date'], y=df['D_Raw_NoQual'], mode='lines', name='Discharge (Raw Normal - hidden)', line=dict(color=COLOR_NORMAL, width=1.5), connectgaps=False, legendgroup='discharge_normal', showlegend=False, hovertext=df['line_hovertext'], hoverinfo='text'))
-    fig.add_trace(go.Scatter(x=df['Date'], y=df['D_Rev_Qual'], mode='lines', name='Discharge (Qualified)', line=dict(color=COLOR_QUALIFIED, width=1.5), connectgaps=False, legendgroup='discharge_qualified', showlegend=True, hovertext=df['line_hovertext'], hoverinfo='text'))
-    fig.add_trace(go.Scatter(x=df['Date'], y=df['D_Raw_Qual'], mode='lines', name='Discharge (Raw Qualified - hidden)', line=dict(color=COLOR_QUALIFIED, width=1.5), connectgaps=False, legendgroup='discharge_qualified', showlegend=False, hovertext=df['line_hovertext'], hoverinfo='text'))
+    # Normal (Reviewed)
+    fig.add_trace(go.Scatter(
+        x=df['Date'], y=df['D_Rev_NoQual'], mode='lines', name='Discharge',
+        line=dict(color=COLOR_NORMAL, width=1.5), connectgaps=False,
+        legendgroup=LG_DISCHARGE, showlegend=True,
+        hovertext=df['line_hovertext'], hoverinfo='text'
+    ))
+    # Normal (Raw - hidden, grouped with Normal)
+    fig.add_trace(go.Scatter(
+        x=df['Date'], y=df['D_Raw_NoQual'], mode='lines', name='Discharge (Raw Normal - hidden)',
+        line=dict(color=COLOR_NORMAL, width=1.5), connectgaps=False,
+        legendgroup=LG_DISCHARGE, showlegend=False, # Hidden but part of the group
+        hovertext=df['line_hovertext'], hoverinfo='text'
+    ))
+    # Qualified (Reviewed)
+    fig.add_trace(go.Scatter(
+        x=df['Date'], y=df['D_Rev_Qual'], mode='lines', name='Discharge (Qualified)',
+        line=dict(color=COLOR_QUALIFIED, width=1.5), connectgaps=False,
+        legendgroup=LG_DISCHARGE, showlegend=True,
+        hovertext=df['line_hovertext'], hoverinfo='text'
+    ))
+    # Qualified (Raw - hidden, grouped with Qualified)
+    fig.add_trace(go.Scatter(
+        x=df['Date'], y=df['D_Raw_Qual'], mode='lines', name='Discharge (Raw Qualified - hidden)',
+        line=dict(color=COLOR_QUALIFIED, width=1.5), connectgaps=False,
+        legendgroup=LG_DISCHARGE, showlegend=False, # Hidden but part of the group
+        hovertext=df['line_hovertext'], hoverinfo='text'
+    ))
     logger.debug("Finished adding segmented discharge line traces.")
 
-    # --- Add Flagged Points as Markers ---
-    # (Unchanged)
+
+    # --- 2. Add Flagged Points as Markers ---
     min_val_thresh = site_thresholds.get("min_val", float('nan')); max_val_thresh = site_thresholds.get("max_val", float('nan')); spike_unusual_thresh = site_thresholds.get("spike_unusual", float('nan'))
     repeated_thresh_val = site_thresholds.get("repeated_values_threshold", DEFAULT_REPEATED_THRESHOLD)
     fmt_spike = f"{spike_unusual_thresh:.2f}" if pd.notna(spike_unusual_thresh) else "N/A"; fmt_max = f"{max_val_thresh:.2f}" if pd.notna(max_val_thresh) else "N/A"; fmt_min = f"{min_val_thresh:.2f}" if pd.notna(min_val_thresh) else "N/A"
-    flag_plot_info = {'FLAG_BELOW_CAPACITY': ('red', 'Flag: Below Sensor Capacity (< 0)'), 'FLAG_ZERO': ('blue', 'Flag: Zero Discharge'), 'FLAG_REPEATED': ('green', f'Flag: Repeated Value (>{repeated_thresh_val} readings)'), 'FLAG_GREATER_THAN_MaxValue': ('purple', f'Flag: Over Max Threshold ({fmt_max})'), 'UNUSUAL_SPIKE': ('orange', f'Flag: Unusual Spike (Change > {fmt_spike})'), 'FLAG_LESS_THAN_Min._Value': ('darkred', f'Flag: Below Min Threshold ({fmt_min}, >0)')}
+    # *** CHANGE 3: Update flag label ***
+    flag_plot_info = {
+        'FLAG_BELOW_CAPACITY': ('red', 'Flag: Below Capacity (< 0)'),
+        'FLAG_ZERO': ('blue', 'Flag: Zero Discharge'),
+        'FLAG_REPEATED': ('green', f'Flag: Repeated Value (>{repeated_thresh_val} readings)'),
+        'FLAG_GREATER_THAN_MaxValue': ('purple', f'Flag: Over Estimated Capacity ({fmt_max})'), # <-- Changed here
+        'UNUSUAL_SPIKE': ('orange', f'Flag: Unusual Spike (Change > {fmt_spike})'),
+        'FLAG_LESS_THAN_Min._Value': ('darkred', f'Flag: Below Min Threshold ({fmt_min}, >0)')
+    }
     hover_tmpl_flags = (f'<b>Date:</b> %{{x|%Y-%m-%d}}<br><b>Discharge:</b> %{{y:.2f}} {units}<br><b>%{{meta}}</b><extra></extra>')
     logger.debug("Adding flagged points markers...")
     for flag_col, (color, label) in flag_plot_info.items():
         if flag_col in df.columns and df[flag_col].any():
             subset = df.loc[df[flag_col]];
-            if not subset.empty: fig.add_trace(go.Scatter(x=subset['Date'], y=subset['DISCHARGE'], mode='markers', marker=dict(color=color, size=7, symbol='circle'), name=label, meta=label, hovertemplate=hover_tmpl_flags, showlegend=True)); logger.debug(f" - Added markers for '{flag_col}' ({len(subset)} points)")
+            if not subset.empty:
+                fig.add_trace(go.Scatter(
+                    x=subset['Date'], y=subset['DISCHARGE'], mode='markers',
+                    marker=dict(color=color, size=7, symbol='circle'), name=label,
+                    meta=label, hovertemplate=hover_tmpl_flags,
+                    showlegend=True, legendgroup=LG_FLAGS # Assign to flags group
+                ));
+                logger.debug(f" - Added markers for '{flag_col}' ({len(subset)} points)")
             else: logger.debug(f" - No points to plot for flag '{flag_col}'.")
 
-    # --- Add Threshold Lines and Buffer ---
-    # (Unchanged)
+    # --- 3. Add Threshold Lines and Buffer ---
     if not df.empty:
         min_plot_dt, max_plot_dt = df["Date"].min(), df["Date"].max()
         if pd.notna(min_plot_dt) and pd.notna(max_plot_dt):
             plot_date_range = [min_plot_dt, max_plot_dt]
-            if pd.notna(min_val_thresh) and min_val_thresh > 0: fig.add_trace(go.Scatter(x=plot_date_range, y=[min_val_thresh]*2, mode='lines', name=f"Min Threshold ({fmt_min})", line=dict(color="gray", dash="dash", width=1), hoverinfo='skip', showlegend=True)); logger.debug(f"Added Min Thr line at y={min_val_thresh}")
+            # Min Threshold Line
+            if pd.notna(min_val_thresh) and min_val_thresh > 0:
+                fig.add_trace(go.Scatter(
+                    x=plot_date_range, y=[min_val_thresh]*2, mode='lines',
+                    name=f"Min Threshold ({fmt_min})",
+                    line=dict(color="gray", dash="dash", width=1),
+                    hoverinfo='skip', showlegend=True, legendgroup=LG_THRESHOLDS # Assign group
+                ));
+                logger.debug(f"Added Min Thr line at y={min_val_thresh}")
+            # Max Threshold Line
             if pd.notna(max_val_thresh):
-                fig.add_trace(go.Scatter(x=plot_date_range, y=[max_val_thresh]*2, mode='lines', name=f"Max Threshold ({fmt_max})", line=dict(color="purple", dash="dash", width=1.5), hoverinfo='skip', showlegend=True)); logger.debug(f"Added Max Thr line at y={max_val_thresh}")
+                max_threshold_label = f"Estimated Max Capacity ({fmt_max})"
+                fig.add_trace(go.Scatter(
+                    x=plot_date_range, y=[max_val_thresh]*2, mode='lines',
+                    name=max_threshold_label,
+                    line=dict(color="purple", dash="dash", width=1.5),
+                    hoverinfo='skip', showlegend=True, legendgroup=LG_THRESHOLDS # Assign group
+                ));
+                logger.debug(f"Added Max Thr line (as '{max_threshold_label}') at y={max_val_thresh}")
+                # Gradient Buffer (associated with Max Threshold visually)
                 if max_val_thresh > 0:
                     buffer = max_val_thresh * BUFFER_PERCENTAGE
-                    if len(df['Date']) >= 2: logger.debug(f"Adding gradient buffer (Amount: {buffer:.2f})"); add_gradient_buffer(fig, df['Date'], max_val_thresh, buffer, BUFFER_START_COLOR_RGBA, BUFFER_END_COLOR_RGBA, BUFFER_NUM_BANDS, logger)
+                    if len(df['Date']) >= 2:
+                        logger.debug(f"Adding gradient buffer (Amount: {buffer:.2f})");
+                        add_gradient_buffer(fig, df['Date'], max_val_thresh, buffer, BUFFER_START_COLOR_RGBA, BUFFER_END_COLOR_RGBA, BUFFER_NUM_BANDS, logger) # add_gradient_buffer handles showlegend=False
 
-    # --- Prepare Data and Add Bar Traces for Review Status Progress Bar ---
-    # (Unchanged)
-    # ... prep and add progress bar ...
+
+    # --- Prepare Data for Review Status Progress Bar ---
+    # (Data preparation remains the same)
     logger.info("Preparing data for review status progress bar...")
     review_periods = [];
     if 'ReviewStatus' in df.columns and not df.empty: df_sorted = df.sort_values('Date'); df_sorted['status_group'] = (df_sorted['ReviewStatus'] != df_sorted['ReviewStatus'].shift()).cumsum(); grouped = df_sorted.groupby('status_group'); [(review_periods.append((group['Date'].min(), group['Date'].max(), group['ReviewStatus'].iloc[0]))) for name, group in grouped if not group.empty]; logger.info(f"Identified {len(review_periods)} review status periods.")
@@ -299,33 +369,96 @@ def generate_plot_for_site(
             else: unknown_bar_x.append(mid_point); unknown_bar_widths.append(width_ms); unknown_bar_hover.append(hover_text); unknown_bar_text.append(bar_label)
             if i < len(review_periods) - 1: period_boundaries.append(end_time)
             elif i == len(review_periods) - 1: period_boundaries.append(end_time)
-    legend_group_bar = 'review_status_bar'; logger.debug("Adding review status bar traces with text...")
-    if reviewed_bar_x: fig.add_trace(go.Bar(x=reviewed_bar_x, y=[REVIEW_BAR_Y_VALUE] * len(reviewed_bar_x), width=reviewed_bar_widths, base=0, marker_color=REVIEW_BAR_COLORS['Reviewed'], name='Reviewed (Bar)', legendgroup=legend_group_bar, hovertext=reviewed_bar_hover, hoverinfo='text', text=reviewed_bar_text, textposition='inside', insidetextanchor='middle', textfont=dict(color='white', size=PROGRESS_BAR_TEXT_SIZE), yaxis='y2', showlegend=True)); logger.debug(f" - Added 'Reviewed' bar trace ({len(reviewed_bar_x)} segments).")
-    if raw_bar_x: fig.add_trace(go.Bar(x=raw_bar_x, y=[REVIEW_BAR_Y_VALUE] * len(raw_bar_x), width=raw_bar_widths, base=0, marker_color=REVIEW_BAR_COLORS['Raw'], name='Raw (Bar)', legendgroup=legend_group_bar, hovertext=raw_bar_hover, hoverinfo='text', text=raw_bar_text, textposition='inside', insidetextanchor='middle', textfont=dict(color='white', size=PROGRESS_BAR_TEXT_SIZE), yaxis='y2', showlegend=True)); logger.debug(f" - Added 'Raw' bar trace ({len(raw_bar_x)} segments).")
-    if unknown_bar_x: fig.add_trace(go.Bar(x=unknown_bar_x, y=[REVIEW_BAR_Y_VALUE] * len(unknown_bar_x), width=unknown_bar_widths, base=0, marker_color=REVIEW_BAR_COLORS['Unknown'], name='Unknown (Bar)', legendgroup=legend_group_bar, hovertext=unknown_bar_hover, hoverinfo='text', text=unknown_bar_text, textposition='inside', insidetextanchor='middle', textfont=dict(color='black', size=PROGRESS_BAR_TEXT_SIZE), yaxis='y2', showlegend=True)); logger.debug(f" - Added 'Unknown Status' bar trace ({len(unknown_bar_x)} segments).")
+
+    # --- 4. Add Dummy Trace for "Data Quality Status" Header ---
+    logger.debug("Adding dummy trace for 'Data Quality Status' legend header")
+    fig.add_trace(go.Scatter(
+        mode='markers', # Needs a mode, markers is fine
+        x=[None], y=[None], # No actual data point
+        marker=dict(opacity=0), # Make the marker invisible
+        name='<b>Data Quality Status</b>', # The header text
+        showlegend=True,
+        legendgroup=LG_REVIEW_STATUS # Group with the bars that follow
+    ))
+
+    # --- 5. Add Review Status Bar Traces ---
+    logger.debug("Adding review status bar traces with text...")
+    if reviewed_bar_x:
+        fig.add_trace(go.Bar(
+            x=reviewed_bar_x, y=[REVIEW_BAR_Y_VALUE] * len(reviewed_bar_x), width=reviewed_bar_widths, base=0,
+            marker_color=REVIEW_BAR_COLORS['Reviewed'], name='Reviewed', # Simplified name
+            legendgroup=LG_REVIEW_STATUS, # Assign group
+            hovertext=reviewed_bar_hover, hoverinfo='text', text=reviewed_bar_text,
+            textposition='inside', insidetextanchor='middle', textfont=dict(color='white', size=PROGRESS_BAR_TEXT_SIZE),
+            yaxis='y2', showlegend=True
+        ))
+        logger.debug(f" - Added 'Reviewed' bar trace ({len(reviewed_bar_x)} segments).")
+    if raw_bar_x:
+        fig.add_trace(go.Bar(
+            x=raw_bar_x, y=[REVIEW_BAR_Y_VALUE] * len(raw_bar_x), width=raw_bar_widths, base=0,
+            marker_color=REVIEW_BAR_COLORS['Raw'], name='Raw', # Simplified name
+            legendgroup=LG_REVIEW_STATUS, # Assign group
+            hovertext=raw_bar_hover, hoverinfo='text', text=raw_bar_text,
+            textposition='inside', insidetextanchor='middle', textfont=dict(color='white', size=PROGRESS_BAR_TEXT_SIZE),
+            yaxis='y2', showlegend=True
+        ))
+        logger.debug(f" - Added 'Raw' bar trace ({len(raw_bar_x)} segments).")
+    if unknown_bar_x:
+        fig.add_trace(go.Bar(
+            x=unknown_bar_x, y=[REVIEW_BAR_Y_VALUE] * len(unknown_bar_x), width=unknown_bar_widths, base=0,
+            marker_color=REVIEW_BAR_COLORS['Unknown'], name='Unknown', # Simplified name
+            legendgroup=LG_REVIEW_STATUS, # Assign group
+            hovertext=unknown_bar_hover, hoverinfo='text', text=unknown_bar_text,
+            textposition='inside', insidetextanchor='middle', textfont=dict(color='black', size=PROGRESS_BAR_TEXT_SIZE),
+            yaxis='y2', showlegend=True
+        ))
+        logger.debug(f" - Added 'Unknown Status' bar trace ({len(unknown_bar_x)} segments).")
+
     review_dividing_lines = [];
-    if len(period_boundaries) > 2: internal_boundaries = period_boundaries[1:-1]; logger.debug(f"Adding {len(internal_boundaries)} divider lines to review bar."); [review_dividing_lines.append(go.layout.Shape(type='line', xref='x', yref='y2 domain', x0=t, x1=t, y0=0, y1=1, line=dict(color='white', width=2), layer='above')) for t in internal_boundaries]
+    if len(period_boundaries) > 2:
+        internal_boundaries = period_boundaries[1:-1];
+        logger.debug(f"Adding {len(internal_boundaries)} divider lines to review bar.");
+        [review_dividing_lines.append(go.layout.Shape(type='line', xref='x', yref='y2 domain', x0=t, x1=t, y0=0, y1=1, line=dict(color='white', width=2), layer='above')) for t in internal_boundaries]
 
     # 8. Calculate Basic Statistics
-    # (Unchanged)
     logger.debug("Calculating basic statistics...")
     stats_dict = None; discharge_numeric = df['DISCHARGE'].dropna()
     if not discharge_numeric.empty: mean_val, min_val, max_val = discharge_numeric.mean(), discharge_numeric.min(), discharge_numeric.max(); stats_dict = {"count": f"{discharge_numeric.count():,}", "mean": f"{mean_val:.2f}" if pd.notna(mean_val) else "N/A", "min": f"{min_val:.2f}" if pd.notna(min_val) else "N/A", "max": f"{max_val:.2f}" if pd.notna(max_val) else "N/A", "units": units}; logger.info(f"Calculated Stats: {stats_dict}")
     else: logger.warning("No numeric discharge data for stats."); stats_dict = {"count": "0", "mean": "N/A", "min": "N/A", "max": "N/A", "units": units}
 
     # 9. Finalize Figure Layout
-    # (Unchanged)
     logger.debug("Finalizing plot layout...")
     progress_bar_height = 0.1; main_plot_bottom_margin = progress_bar_height + 0.1
+
+    # --- Legend Configuration ---
+    # *** CHANGE 1 & 2 modification: Update legend title text formatting ***
+    legend_main_title = "<b>Data Quality Flags</b><br><i>Qualified data is set for Sept as an example</i><br>" # Italic, no parens, extra <br> for space
+
     fig.update_layout(
         title=dict(text=plot_title, x=0.5, y=0.97, font_size=40),
         xaxis=dict(title_text="", title_font_size=32, tickfont_size=24, showline=False, zeroline=True, zerolinewidth=1.5, zerolinecolor='darkgrey'),
         yaxis=dict(title_text=f"{units}", title_font_size=32, tickfont_size=24, showline=False, zeroline=True, zerolinewidth=1.5, zerolinecolor='darkgrey', domain=[main_plot_bottom_margin, 1.0]),
         yaxis2=dict(domain=[0, progress_bar_height], visible=False, showticklabels=False, showgrid=False, zeroline=False, fixedrange=True),
-        showlegend=True, legend=dict(yanchor="top", y=0.98, xanchor="left", x=1.01, bgcolor="rgba(255,255,255,0.8)", bordercolor="LightGrey", borderwidth=1, font_size=22, tracegroupgap=10),
-        template="plotly_white", margin=dict(t=80, r=250, b=60, l=100), height=700, hovermode='closest',
+        showlegend=True,
+        legend=dict(
+            yanchor="top", y=0.98, xanchor="left", x=1.01,
+            bgcolor="rgba(255,255,255,0.8)", bordercolor="LightGrey", borderwidth=1,
+            font_size=22, # Font size for legend items
+            # *** CHANGE 4: Re-enable tracegroupgap for space ***
+            tracegroupgap=25, # Add space between legend groups (Thresholds -> Review Status)
+            title=dict(
+                text=legend_main_title, # Only the main title section here
+                font=dict(size=24) # Font size for the overall legend title section
+            ),
+            # traceorder="normal" # Default, order based on trace addition
+        ),
+        template="plotly_white",
+        margin=dict(t=80, r=350, b=60, l=100), # Kept increased right margin
+        height=700,
+        hovermode='closest',
         shapes=review_dividing_lines
     )
+
 
     logger.info(f"--- Plot generation successful for SiteID {site_id} ---")
     logger.info(f"Final Plot Range: {actual_start_date_str} to {actual_end_date_str}")
