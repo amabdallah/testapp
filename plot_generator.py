@@ -386,7 +386,7 @@ def generate_plot_for_site(
     # --- 4. Add Dummy Trace for "Data Quality Status" Header ---
     logger.debug("Adding dummy trace for 'Data Quality Status' legend header")
     # *** Update dummy trace name with italic subtext ***
-    status_header_text = "<b>Data Quality Status</b><br><i>Review status 'raw' is set for the last year</b> as an example</i>"
+    status_header_text = "<b>Data Quality Status</b><br><i>Review status 'raw' is set<br>for the last year as an example</i>"
     fig.add_trace(go.Scatter(
         mode='markers', # Needs a mode, markers is fine
         x=[None], y=[None], # No actual data point
@@ -446,7 +446,7 @@ def generate_plot_for_site(
     progress_bar_height = 0.1; main_plot_bottom_margin = progress_bar_height + 0.1
 
     # --- Legend Configuration ---
-    legend_main_title = "<b>Data Quality Flags</b><br><i>Qualified data is set for Sept as an example</i><br>" # Italic, no parens, extra <br> for space
+    legend_main_title = "<b>Data Quality Flags</b><br><i>Qualified data is set<br>for Sept as an example</i><br>" # Italic, no parens, extra <br> for space
 
     fig.update_layout(
         title=dict(text=plot_title, x=0.5, y=0.97, font_size=40),
