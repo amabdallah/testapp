@@ -129,7 +129,6 @@ def get_site_thresholds(site_id: str, logger: logging.Logger) -> Optional[Dict[s
 
 # --- Apply Flagging Function (unchanged) ---
 def apply_flagging(df: pd.DataFrame, thresholds: Dict[str, Any], logger: logging.Logger) -> pd.DataFrame:
-    # (Code unchanged)
     logger.info("Applying flagging logic...")
     required_keys = ['min_val', 'max_val', 'spike_unusual', 'repeated_days']
     flag_cols = ['FLAG_LESS_THAN_Min._Value', 'FLAG_ZERO', 'FLAG_REPEATED', 'FLAG_GREATER_THAN_MaxValue', 'UNUSUAL_SPIKE', 'FLAG_BELOW_CAPACITY']
@@ -178,43 +177,38 @@ def add_gradient_buffer(fig, dates, mean_value, buffer, start_color, end_color, 
 
 
 # --- Core Plot Generation Function ---
-# --- MODIFIED ---
+# --- Incorporates ReviewStatus and Line Coloring ---
 def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str], end_date_str_requested: Optional[str], is_reset: bool, logger: logging.Logger) -> Tuple[Optional[go.Figure], Optional[str], str, str, str, str, Optional[Dict], Optional[Dict]]:
     """
     Generates Plotly figure for a site. Checks for global threshold load failure first.
+    Adds ReviewStatus and colors discharge line (Gray=Reviewed, Blue=Raw).
     Returns: tuple(fig, error_msg, station_name, start_date_actual, end_date_actual, units, site_thresholds_dict, stats_dict)
     """
     station_name = "N/A"; units = 'Unknown Units'; site_thresholds = None; stats_dict = None
     actual_start_date_str = start_date_str_requested or ""; actual_end_date_str = end_date_str_requested or ""
     logger.info(f"Plot Gen Start: Site={site_id}, ReqStart={start_date_str_requested}, ReqEnd={end_date_str_requested}, Reset={is_reset}")
 
-    # --- NEW: Check if global thresholds failed to load initially ---
+    # --- Check if global thresholds failed to load initially ---
     if thresholds_df_global is None or thresholds_df_global.empty:
         err = "CRITICAL ERROR: The application's threshold configuration file failed to load or is empty. Cannot process any site data."
         logger.error(f"{err} (Attempted to generate plot for SiteID: {site_id})")
-        # Return structure: (fig, error_msg, name, start, end, units, thresholds_dict, stats_dict)
-        # Pass back known values like requested dates where possible for context
         return None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
-    # --- END NEW CHECK ---
+    # --- END CHECK ---
 
     # 1. Get Site-Specific Thresholds (only if global load was okay)
     site_thresholds = get_site_thresholds(site_id, logger)
     # Try to get station name from global df even if site_thresholds is None for this specific site
     if thresholds_df_global is not None and 'station_name' in thresholds_df_global.columns and 'SiteID_str' in thresholds_df_global.columns:
         site_row_name = thresholds_df_global[thresholds_df_global['SiteID_str'] == str(site_id)]
-        if not site_row_name.empty: station_name = site_row_name['station_name'].iloc[0]
+        if not site_row_name.empty: station_name = site_row_name['station_name'].iloc[0] # Use threshold file name initially
 
     # Check if get_site_thresholds failed for this specific site
     if site_thresholds is None:
-        # This error now means the site was not found, or its specific row had invalid core data IN THE LOADED FILE
-        err = f"Error: Threshold data missing or invalid for SiteID {site_id} in the loaded configuration file. Cannot generate plot." # Reworded slightly
+        err = f"Error: Threshold data missing or invalid for SiteID {site_id} in the loaded configuration file. Cannot generate plot."
         logger.error(err)
-        # Still return None for site_thresholds dict
         return None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
 
-    # --- Steps 2-7 (Fetch Data, Process, Filter, Flag, Plot, Stats, Layout) remain the same ---
     # 2. Fetch Data
-    # (Code unchanged)
     api_end = datetime.now().strftime('%Y-%m-%d') if (is_reset or not validate_date(end_date_str_requested)) else end_date_str_requested
     api_start = "1900-01-01" if (is_reset or not validate_date(start_date_str_requested)) else start_date_str_requested
     logger.info(f"API Call Params: Start={api_start}, End={api_end}")
@@ -226,10 +220,15 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     except (json.JSONDecodeError, ValueError) as e: err = f"JSON Decode Error site {site_id}: {e}. Snippet: {response.text[:200]}..."; logger.error(err); return None, err, station_name, start_date_str_requested, end_date_str_requested, units, site_thresholds, None
 
     # 3. Process Data
-    # (Code unchanged)
     metadata = {f: data.get(f, "N/A") for f in ["station_name", "units"]}; units = metadata.get('units', 'Unknown Units'); units = units if units and units!='N/A' else 'Unknown Units'
-    if metadata.get('station_name') and metadata['station_name'] != 'N/A': station_name = metadata['station_name'] # Update station name from API if available
-    logger.info(f"API Meta: Name={station_name}, Units={units}")
+    # --- Prioritize API station name ---
+    if metadata.get('station_name') and metadata['station_name'] != 'N/A':
+        station_name = metadata['station_name']
+        logger.info(f"Using Station Name from API: {station_name}")
+    else:
+        logger.info(f"API did not provide station name. Using name from thresholds file (if available): {station_name}")
+    # ------------------------------------
+    logger.info(f"API Meta: Units={units}") # Log final units
     if "data" not in data or not isinstance(data["data"], list) or not data["data"]: err = f"No 'data' in API response site {site_id}."; logger.warning(err); return None, err, station_name, start_date_str_requested, end_date_str_requested, units, site_thresholds, None
     try:
         df = pd.DataFrame(data["data"], columns=["date", "value"]); df.rename(columns={"date": "Date", "value": "DISCHARGE"}, inplace=True)
@@ -239,25 +238,78 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     if df.empty: err = f"No valid data points after processing site {site_id}."; logger.warning(err); return None, err, station_name, start_date_str_requested, end_date_str_requested, units, site_thresholds, None
 
     # 4. Filter Dates
-    # (Code unchanged)
     min_data_dt, max_data_dt = df['Date'].min(), df['Date'].max(); start_req_dt_obj = validate_date(start_date_str_requested); end_req_dt_obj = validate_date(end_date_str_requested)
     start_dt_final = min_data_dt if (is_reset or not start_req_dt_obj) else max(start_req_dt_obj, min_data_dt); end_dt_final = max_data_dt if (is_reset or not end_req_dt_obj) else min(end_req_dt_obj, max_data_dt)
     if pd.isna(start_dt_final) or pd.isna(end_dt_final) or start_dt_final > end_dt_final: logger.warning("Date range invalid/no overlap. Using full data range."); start_dt_final, end_dt_final = min_data_dt, max_data_dt
     actual_start_date_str = start_dt_final.strftime('%Y-%m-%d') if pd.notna(start_dt_final) else ""; actual_end_date_str = end_dt_final.strftime('%Y-%m-%d') if pd.notna(end_dt_final) else ""
     logger.info(f"Final Plot Range: {actual_start_date_str} to {actual_end_date_str}")
-    df_filtered = df.loc[(df['Date'] >= start_dt_final) & (df['Date'] <= end_dt_final)].copy().reset_index(drop=True) if pd.notna(start_dt_final) and pd.notna(end_dt_final) else pd.DataFrame()
+    # Ensure df is filtered correctly before proceeding
+    if pd.notna(start_dt_final) and pd.notna(end_dt_final):
+         df_filtered = df.loc[(df['Date'] >= start_dt_final) & (df['Date'] <= end_dt_final)].copy().reset_index(drop=True)
+    else: # Handle cases where final dates might be NaT if original data was empty
+         df_filtered = pd.DataFrame(columns=df.columns) # Create empty df with same columns
+
     if df_filtered.empty: err = f"No data for site {site_id} in range [{actual_start_date_str} to {actual_end_date_str}]."; logger.warning(err); return None, err, station_name, actual_start_date_str, actual_end_date_str, units, site_thresholds, None
     df = df_filtered; logger.info(f"Processing {len(df)} points after date filtering.")
 
-    # 5. Apply Flagging
-    # (Code unchanged)
+
+    # --- NEW: Add ReviewStatus column based on date ---
+    if not df.empty and 'Date' in df.columns:
+        latest_date = df['Date'].max()
+        if pd.notna(latest_date):
+            one_year_ago = latest_date - pd.DateOffset(years=1)
+            logger.info(f"Setting ReviewStatus threshold: Dates > {one_year_ago.strftime('%Y-%m-%d')} marked as 'Raw'.")
+            df['ReviewStatus'] = 'Reviewed' # Default to Reviewed
+            df.loc[df['Date'] > one_year_ago, 'ReviewStatus'] = 'Raw' # Update last year to Raw
+            logger.info(f"ReviewStatus Counts: Reviewed={ (df['ReviewStatus'] == 'Reviewed').sum() }, Raw={ (df['ReviewStatus'] == 'Raw').sum() }")
+        else:
+            logger.warning("Could not determine latest date in filtered data. Defaulting all ReviewStatus to 'Reviewed'.")
+            df['ReviewStatus'] = 'Reviewed'
+    else:
+         logger.warning("DataFrame empty or 'Date' column missing before adding ReviewStatus.")
+         if not df.empty: df['ReviewStatus'] = 'Unknown' # Add column as Unknown if date missing
+    # --- END ReviewStatus ---
+
+
+    # 5. Apply Flagging (Runs AFTER ReviewStatus is added)
     df = apply_flagging(df, site_thresholds, logger)
 
+
     # 6. Create Plot Figure
-    # (Code unchanged)
     plot_title = f"Data from {actual_start_date_str} to {actual_end_date_str}"
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df['Date'], y=df['DISCHARGE'], mode='lines', name='Discharge', line=dict(color='lightgray', width=1.5), connectgaps=False, hoverinfo='skip', showlegend=False))
+    fig = go.Figure() # Initialize figure
+
+
+    # --- MODIFIED: Add separate traces for Reviewed and Raw data ---
+    if 'ReviewStatus' in df.columns:
+        # Add Reviewed data trace (Gray)
+        df_reviewed = df[df['ReviewStatus'] == 'Reviewed']
+        if not df_reviewed.empty:
+            fig.add_trace(go.Scatter(
+                x=df_reviewed['Date'], y=df_reviewed['DISCHARGE'], mode='lines',
+                name='Discharge (Reviewed)', line=dict(color='lightgray', width=1.5),
+                connectgaps=False, hoverinfo='skip', showlegend=True
+            ))
+        else: logger.info("No 'Reviewed' data points to plot.")
+
+        # Add Raw data trace (Blue)
+        df_raw = df[df['ReviewStatus'] == 'Raw']
+        if not df_raw.empty:
+            fig.add_trace(go.Scatter(
+                x=df_raw['Date'], y=df_raw['DISCHARGE'], mode='lines',
+                name='Discharge (Raw)', line=dict(color='blue', width=1.5),
+                connectgaps=False, hoverinfo='skip', showlegend=True
+            ))
+        else: logger.info("No 'Raw' data points to plot.")
+    else:
+        # Fallback if ReviewStatus column somehow wasn't added
+        logger.warning("ReviewStatus column missing. Plotting entire discharge as default gray line.")
+        if not df.empty:
+             fig.add_trace(go.Scatter(x=df['Date'], y=df['DISCHARGE'], mode='lines', name='Discharge', line=dict(color='lightgray', width=1.5), connectgaps=False, hoverinfo='skip', showlegend=False))
+    # --- END MODIFIED LINE TRACES ---
+
+
+    # --- Add Flagged Points (Existing logic - targets main df) ---
     min_val_thresh = site_thresholds.get("min_val", float('nan')); max_val_thresh = site_thresholds.get("max_val", float('nan'))
     spike_unusual_thresh = site_thresholds.get("spike_unusual", float('nan')); repeated_days_thresh = site_thresholds.get("repeated_days", DEFAULT_REPEATED_DAYS)
     fmt_spike = f"{spike_unusual_thresh:.2f}" if pd.notna(spike_unusual_thresh) else "N/A"; fmt_max = f"{max_val_thresh:.2f}" if pd.notna(max_val_thresh) else "N/A"
@@ -265,7 +317,15 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     hover_tmpl = (f'<b>Date:</b> %{{x|%Y-%m-%d}}<br><b>Value:</b> %{{y:.2f}} {units}<br><b>Flag:</b> %{{meta}}<extra></extra>')
     for flag_col, (color, label) in flag_plot_info.items():
         if flag_col in df.columns and df[flag_col].any():
-            subset = df.loc[df[flag_col]]; fig.add_trace(go.Scatter(x=subset['Date'], y=subset['DISCHARGE'], mode='markers', marker=dict(color=color, size=6, symbol='circle'), name=label, meta=label, hovertemplate=hover_tmpl, showlegend=True))
+            subset = df.loc[df[flag_col]];
+            fig.add_trace(go.Scatter(
+                 x=subset['Date'], y=subset['DISCHARGE'], mode='markers',
+                 marker=dict(color=color, size=6, symbol='circle'),
+                 name=label, meta=label, hovertemplate=hover_tmpl, showlegend=True
+            ))
+
+
+    # --- Add threshold lines (Existing logic) ---
     min_plot_dt, max_plot_dt = df["Date"].min(), df["Date"].max()
     if pd.notna(min_plot_dt) and pd.notna(max_plot_dt):
         plot_date_range = [min_plot_dt, max_plot_dt]
@@ -277,14 +337,14 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
                 buffer = max_val_thresh * BUFFER_PERCENTAGE
                 if len(df['Date']) >= 2: add_gradient_buffer(fig, df['Date'], max_val_thresh, buffer, BUFFER_START_COLOR_RGBA, BUFFER_END_COLOR_RGBA, BUFFER_NUM_BANDS, logger)
 
-    # 6a. Calculate Statistics
-    # (Code unchanged)
+
+    # 6a. Calculate Statistics (Existing logic using main df)
     stats_dict = None; discharge_num = df['DISCHARGE'].dropna()
     if not discharge_num.empty: stats_dict = {"count": f"{discharge_num.count():,}", "mean": f"{discharge_num.mean():.2f}" if pd.notna(discharge_num.mean()) else "N/A", "min": f"{discharge_num.min():.2f}" if pd.notna(discharge_num.min()) else "N/A", "max": f"{discharge_num.max():.2f}" if pd.notna(discharge_num.max()) else "N/A", "units": units}; logger.info(f"Stats: {stats_dict}")
     else: logger.warning("No numeric discharge data for stats.")
 
-    # 7. Finalize Layout
-    # (Code unchanged)
+
+    # 7. Finalize Layout (Existing logic)
     fig.update_layout(
         title=dict(text=plot_title, x=0.5, y=0.97, font_size=24),
         xaxis=dict(title_text="Date", title_font_size=20, tickfont_size=16, showline=False, zeroline=True, zerolinewidth=1.5, zerolinecolor='darkgrey'),
@@ -295,14 +355,13 @@ def generate_plot_for_site(site_id: str, start_date_str_requested: Optional[str]
     )
 
     logger.info(f"Plot generated successfully for {site_id} [{actual_start_date_str} to {actual_end_date_str}]")
-    # Return the successfully generated figure and other info
+    # Return results including the potentially updated station_name from API
     return fig, None, station_name, actual_start_date_str, actual_end_date_str, units, site_thresholds, stats_dict
 # --- END generate_plot_for_site ---
 
 
 # --- Update Threshold in CSV Function (unchanged) ---
 def update_threshold_in_csv(site_id: str, new_thresholds: Dict[str, Any], logger: logging.Logger) -> Tuple[bool, str]:
-    # (Code unchanged)
     global thresholds_df_global
     f = None; lock_acquired = False
     success_status = False; return_message = "An unknown issue occurred during threshold update."
