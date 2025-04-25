@@ -1,8 +1,26 @@
+# Core Dash
+dash==2.17.0
+dash-bootstrap-components==1.6.0
+dash-core-components==2.0.0  # Installed with dash
+dash-html-components==2.0.0 # Installed with dash
+dash-table==5.0.0           # Installed with dash
+
+# Web Server (if used)
+gunicorn==23.0.0 # Or your chosen version
+
+# Plotting & Data
+plotly==5.22.0
+pandas==2.2.2
+numpy==1.26.4
+
+# HTTP Requests
+requests==2.31.0
+
+# Flask & Dependencies (Installed by Dash - versions might vary)
 Flask==3.0.3
-gunicorn==23.0.0
 Werkzeug==3.0.3
-requests
-pandas
-numpy
-scikit-learn
-plotly
+blinker==1.8.2
+click==8.1.7
+itsdangerous==2.2.0
+Jinja2==3.1.4
+MarkupSafe==2.1.5

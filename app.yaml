@@ -1,2 +1,58 @@
+# app.yaml
+
+# --- Runtime Environment ---
+# Specify a supported Python 3 runtime. Check Google Cloud docs for the latest.
+# Examples: python310, python311, python312
 runtime: python39
-entrypoint: gunicorn -b :$PORT main:app
+
+# --- Entrypoint ---
+# Tells App Engine how to start your web server (Gunicorn).
+# Format: gunicorn -b :$PORT <your_main_python_file>:<flask_server_variable>
+# - <your_main_python_file>: The name of your Python file without '.py' (e.g., main_dash_app)
+# - <flask_server_variable>: The variable in your Python file assigned to 'app.server' (we used 'server')
+# - '-b :$PORT': Binds Gunicorn to the port provided by App Engine.
+entrypoint: gunicorn -b :$PORT main_dash_app:server
+
+# --- Instance Class and Scaling (Example for Standard Environment) ---
+# Controls the computing resources and how the app scales.
+# Start with basic settings and adjust based on performance/cost needs.
+# instance_class: F1 # Optional: Defaults usually start small (like F1)
+
+automatic_scaling:
+  min_instances: 0      # Allows scaling down to zero to save cost when idle
+  max_instances: 1      # Start with a low max, increase if needed for traffic
+  # min_idle_instances: 0 # Optional: control warm instances
+  # max_idle_instances: 1 # Optional: control warm instances
+  target_cpu_utilization: 0.8 # Default target CPU usage before scaling up
+  # max_concurrent_requests: 10 # Optional: Limit concurrent requests per instance (default is 10 for auto)
+
+# --- Environment Variables ---
+# Set any environment variables your application needs.
+env_variables:
+  # IMPORTANT: Replace with a strong, unique secret key for production!
+  # Used by Flask/Dash for session security (e.g., flash messages).
+  #FLASK_SECRET_KEY: 'YOUR_REALLY_STRONG_RANDOM_SECRET_KEY'
+
+  # Ensure Dash debug mode is OFF in production
+  DASH_DEBUG: 'False'
+
+  # Add any other environment variables your specific app might need
+  # Example: If API keys or database URIs were used:
+  # API_KEY: 'your_api_key_value'
+  # DATABASE_URL: 'your_database_connection_string'
+
+# --- Handlers (Optional) ---
+# Needed if you serve static files (CSS, JS, images) directly from your app.
+# Our current app uses Dash's built-in serving and CDN for Plotly,
+# so this section might not be needed unless you add custom static assets.
+# handlers:
+# - url: /static # Example: URL path for static files
+#   static_dir: static # Example: Directory name in your project containing static files
+
+# - url: /.* # Catch-all handler for dynamic requests handled by the app
+#   script: auto # Directs requests to the entrypoint (your Gunicorn server)
+
+# Note: For Python 3 runtimes, if no handlers are specified, App Engine often
+# defaults to directing all traffic ('/.*') to your app ('script: auto'),
+# which is usually what you want for a Dash app. Explicitly adding the '/.*'
+# handler can sometimes be helpful for clarity or specific configurations.
