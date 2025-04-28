@@ -232,109 +232,118 @@ def get_initial_input_table_data(num_rows: int = NUM_INPUT_ROWS) -> List[Dict[st
     return [{'Date': None, 'Discharge': None, 'Qualifier': None} for _ in range(num_rows)]
 
 
+
 # --- Dash App Layout ---
-app.layout = dbc.Container([
+logger.info("Defining simplified layout...") # Add log
+app.layout = html.Div([
+    html.H1("App Loaded - Test Layout"),
+    dcc.Location(id='url', refresh=False) # Keep location if needed by callbacks you might test later
+])
+logger.info("Simplified layout defined.") # Add log
+
+# --- Dash App Layout ---
+# app.layout = dbc.Container([
     # Stores and Location
     # ... (keep existing stores and location) ...
-    dcc.Location(id='url', refresh=False),
-    dcc.Store(id='data-store'),
-    dcc.Store(id='site-info-store'),
-    dcc.Store(id='thresholds-store'),
-    dcc.Store(id='clicked-point-store'),
+    # dcc.Location(id='url', refresh=False),
+    # dcc.Store(id='data-store'),
+    # dcc.Store(id='site-info-store'),
+    # dcc.Store(id='thresholds-store'),
+    # dcc.Store(id='clicked-point-store'),
 
 
     # Header and Disclaimer
     # ... (keep existing header) ...
-    html.H3("Disclaimer: App for internal use, testing, and demonstration purposes", style={'color': 'red', 'textAlign': 'center'}),
-    html.H1(id='main-title', children="Data Quality Analysis", style={'textAlign': 'center'}),
-    html.Hr(),
+    # html.H3("Disclaimer: App for internal use, testing, and demonstration purposes", style={'color': 'red', 'textAlign': 'center'}),
+    # html.H1(id='main-title', children="Data Quality Analysis", style={'textAlign': 'center'}),
+    # html.Hr(),
 
 
     # Notification Area
     # ... (keep existing notification area) ...
-    dbc.Row(dbc.Col(html.Div(id='notification-area'), width=12)),
+    # dbc.Row(dbc.Col(html.Div(id='notification-area'), width=12)),
 
 
     # --- Control Card ---
     # ... (keep existing control card, including the 'Add Data' button) ...
-    dbc.Card(dbc.CardBody([
-        dbc.Row([
+    # dbc.Card(dbc.CardBody([
+        # dbc.Row([
             # Site ID Input
-            dbc.Col([
-                dbc.Label("Site ID:", html_for="site-id-input", className="fw-bold"),
-                dbc.Input(id="site-id-input", type="text", placeholder="Enter Site ID", required=True, persistence=True, persistence_type='session')
-            ], md=2),
+            # dbc.Col([
+                # dbc.Label("Site ID:", html_for="site-id-input", className="fw-bold"),
+                # dbc.Input(id="site-id-input", type="text", placeholder="Enter Site ID", required=True, persistence=True, persistence_type='session')
+            # ], md=2),
             # Date Pickers
-            dbc.Col([
-                dbc.Label("Start Date:", html_for="start-date-picker", className="fw-bold"),
-                dcc.DatePickerSingle(id='start-date-picker', display_format='YYYY-MM-DD', persistence=True, persistence_type='session')
-            ], md=2),
-            dbc.Col([
-                dbc.Label("End Date:", html_for="end-date-picker", className="fw-bold"),
-                dcc.DatePickerSingle(id='end-date-picker', display_format='YYYY-MM-DD', persistence=True, persistence_type='session')
-            ], md=2),
+            # dbc.Col([
+                # dbc.Label("Start Date:", html_for="start-date-picker", className="fw-bold"),
+                # dcc.DatePickerSingle(id='start-date-picker', display_format='YYYY-MM-DD', persistence=True, persistence_type='session')
+            # ], md=2),
+            # dbc.Col([
+                # dbc.Label("End Date:", html_for="end-date-picker", className="fw-bold"),
+                # dcc.DatePickerSingle(id='end-date-picker', display_format='YYYY-MM-DD', persistence=True, persistence_type='session')
+            # ], md=2),
             # Action Buttons
-            dbc.Col([
-                dbc.Button("Update Plot", id="update-button", color="primary", className="me-1 mt-4"),
-                dbc.Button("Reset Range", id="reset-button", color="secondary", outline=True, className="me-1 mt-4"),
+            # dbc.Col([
+                # dbc.Button("Update Plot", id="update-button", color="primary", className="me-1 mt-4"),
+                # dbc.Button("Reset Range", id="reset-button", color="secondary", outline=True, className="me-1 mt-4"),
                 # --- UPDATED BUTTONS ---
-                dbc.Button("Record a measurement  Data", id="open-enter-data-modal-button", color="info", outline=True, className="me-1 mt-4", n_clicks=0),
-                dbc.Button("Add Data", id="open-add-multiple-modal-button", color="success", outline=True, className="mt-4", n_clicks=0) # Keep Button
+                # dbc.Button("Record a measurement  Data", id="open-enter-data-modal-button", color="info", outline=True, className="me-1 mt-4", n_clicks=0),
+                # dbc.Button("Add Data", id="open-add-multiple-modal-button", color="success", outline=True, className="mt-4", n_clicks=0) # Keep Button
                 # --- END UPDATED BUTTONS ---
-            ], md=4, className="d-flex align-items-end flex-wrap"), # Added flex-wrap for responsiveness
+            # ], md=4, className="d-flex align-items-end flex-wrap"), # Added flex-wrap for responsiveness
             # Quick Date Selection
-            dbc.Col([
-                dbc.Label("Quick Dates:", className="fw-bold d-block"),
-                dbc.ButtonGroup([
-                    dbc.Button("Last Year", id="quick-year-button", outline=True, color="info", size="sm"),
-                    dbc.Button("Last Month", id="quick-month-button", outline=True, color="info", size="sm")
-                ], className="mt-2")
-            ], md=2, className="text-center"),
-        ], align="start", className="mb-3"),
-    ]), className="mb-3 shadow-sm"),
+            # dbc.Col([
+                # dbc.Label("Quick Dates:", className="fw-bold d-block"),
+                # dbc.ButtonGroup([
+                    # dbc.Button("Last Year", id="quick-year-button", outline=True, color="info", size="sm"),
+                    # dbc.Button("Last Month", id="quick-month-button", outline=True, color="info", size="sm")
+                # ], className="mt-2")
+            # ], md=2, className="text-center"),
+        # ], align="start", className="mb-3"),
+    # ]), className="mb-3 shadow-sm"),
 
     # --- Thresholds & Stats Row ---
     # ... (keep existing thresholds & stats row) ...
-     dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4("Adjust QC Thresholds", className="card-title"),
-            html.Div(id='threshold-form-content', children=html.P("Load data to view/edit thresholds."))
-        ]), className="mb-3 shadow-sm"), md=6),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4("Statistics", className="card-title"),
-            html.Div(id="statistics-display", children="Load data to view statistics.")
-        ]), className="mb-3 shadow-sm"), md=6),
-    ]),
+     # dbc.Row([
+        # dbc.Col(dbc.Card(dbc.CardBody([
+            # html.H4("Adjust QC Thresholds", className="card-title"),
+            # html.Div(id='threshold-form-content', children=html.P("Load data to view/edit thresholds."))
+        # ]), className="mb-3 shadow-sm"), md=6),
+        # dbc.Col(dbc.Card(dbc.CardBody([
+            # html.H4("Statistics", className="card-title"),
+            # html.Div(id="statistics-display", children="Load data to view statistics.")
+        # ]), className="mb-3 shadow-sm"), md=6),
+    # ]),
 
     # --- Main Plot ---
     # ... (keep existing plot row) ...
-    dbc.Row(dbc.Col(dcc.Graph(id='main-plot', config={'scrollZoom': True}), width=12)),
-    html.Hr(),
+    # dbc.Row(dbc.Col(dcc.Graph(id='main-plot', config={'scrollZoom': True}), width=12)),
+    # html.Hr(),
 
 
     # --- Data Table Section (Collapsible) ---
     # ... (keep existing main data table section) ...
-     dbc.Row([
-        dbc.Col([
+     # dbc.Row([
+        # dbc.Col([
             # Heading and Toggle Button
-            dbc.Row([
-                dbc.Col(html.H4("Data Table"), width="auto"),
-                dbc.Col(dbc.Button("Show/Hide Table", id="toggle-table-button", color="secondary", outline=True, size="sm", n_clicks=0), width="auto")
-            ], align="center", className="mt-3 mb-2"),
+            # dbc.Row([
+                # dbc.Col(html.H4("Data Table"), width="auto"),
+                # dbc.Col(dbc.Button("Show/Hide Table", id="toggle-table-button", color="secondary", outline=True, size="sm", n_clicks=0), width="auto")
+            # ], align="center", className="mt-3 mb-2"),
             # Collapsible Content
-            dbc.Collapse(
-                id="table-collapse",
-                is_open=True, # Start visible
-                children=[
-                    html.P("(Discharge column is editable)", className="small text-muted"),
-                    dbc.Alert(id='table-edit-status', children="Click 'Save Changes' below after editing.", color="info", is_open=False, dismissable=True),
-                    html.Div(id='table-container', children=dbc.Alert("Load data to view table.", color="secondary")),
-                    dbc.Button("Save Changes", id="save-button", color="success", className="mt-2", n_clicks=0, disabled=True),
-                    html.Div(id="save-status", className="mt-1")
-                ]
-            )
-        ], width=12)
-    ]),
+            # dbc.Collapse(
+                # id="table-collapse",
+                # is_open=True, # Start visible
+                # children=[
+                    # html.P("(Discharge column is editable)", className="small text-muted"),
+                    # dbc.Alert(id='table-edit-status', children="Click 'Save Changes' below after editing.", color="info", is_open=False, dismissable=True),
+                    # html.Div(id='table-container', children=dbc.Alert("Load data to view table.", color="secondary")),
+                    # dbc.Button("Save Changes", id="save-button", color="success", className="mt-2", n_clicks=0, disabled=True),
+                    # html.Div(id="save-status", className="mt-1")
+                # ]
+            # )
+        # ], width=12)
+    # ]),
 
 
     # --- Modals ---
