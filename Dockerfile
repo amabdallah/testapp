@@ -51,7 +51,7 @@ EXPOSE 8080
 #    - '--threads 8': Number of threads per worker (adjust based on app's I/O needs).
 #    - '--timeout 120': Worker timeout in seconds (adjust based on longest expected request time, should be <= Cloud Run timeout).
 #    - 'main:server': Point Gunicorn to the 'server' object within your 'main.py' file.
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--threads", "8", "--timeout", "120", "main:server"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--threads", "8", "--timeout", "120", "--error-logfile", "-", "main:server"]
 
 # --- Alternative CMD using the $PORT environment variable ---
 # Cloud Run automatically provides the $PORT variable (usually 8080).
