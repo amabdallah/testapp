@@ -278,7 +278,7 @@ app.layout = dbc.Container([
                 dbc.Button("Update Plot", id="update-button", color="primary", className="me-1 mt-4"),
                 dbc.Button("Reset Range", id="reset-button", color="secondary", outline=True, className="me-1 mt-4"),
                 # --- UPDATED BUTTONS ---
-                dbc.Button("Enter Data", id="open-enter-data-modal-button", color="info", outline=True, className="me-1 mt-4", n_clicks=0),
+                dbc.Button("Record a measurement  Data", id="open-enter-data-modal-button", color="info", outline=True, className="me-1 mt-4", n_clicks=0),
                 dbc.Button("Add Data", id="open-add-multiple-modal-button", color="success", outline=True, className="mt-4", n_clicks=0) # Keep Button
                 # --- END UPDATED BUTTONS ---
             ], md=4, className="d-flex align-items-end flex-wrap"), # Added flex-wrap for responsiveness
