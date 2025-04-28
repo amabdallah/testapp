@@ -44,7 +44,8 @@ COLOR_NORMAL = 'lightgray' # Color for normal (non-qualified) discharge line seg
 COLOR_QUALIFIED = 'red' # Color for qualified discharge line segments
 COLOR_UNKNOWN = 'orange' # Color for discharge where status is unknown
 REVIEW_BAR_Y_VALUE = 1 # Y-value position for the review status bar
-PROGRESS_BAR_TEXT_SIZE = 10 # Smaller text size for progress bar labels
+# PROGRESS_BAR_TEXT_SIZE = 10 # Original value
+PROGRESS_BAR_TEXT_SIZE = 20 # Doubled text size for progress bar labels
 
 # --- Utility Functions ---
 def validate_date(date_str: Optional[str]) -> Optional[datetime]:
@@ -275,15 +276,15 @@ def generate_plot_for_site(
     # --- Check Prerequisite: Can we load thresholds if needed? ---
     # Check if threshold module failed to import (only relevant if override NOT provided)
     if thresholds_override is None and 'threshold_manager_dash' not in sys.modules:
-         err = "CRITICAL ERROR: Threshold module (threshold_manager_dash) failed to import. Cannot proceed without thresholds."
-         logger.error(err)
-         return None, None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
+          err = "CRITICAL ERROR: Threshold module (threshold_manager_dash) failed to import. Cannot proceed without thresholds."
+          logger.error(err)
+          return None, None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
     # Also check if the file load previously failed (if relying on global state)
     if thresholds_override is None and (thresholds_df_global is None or thresholds_df_global.empty):
-         if load_thresholds(THRESHOLDS_CSV_PATH, logger) is None: # Attempt load again just in case
-              err = f"CRITICAL ERROR: Threshold load FAILED. File '{THRESHOLDS_CSV_PATH}' could not be loaded or is empty. Cannot proceed."
-              logger.error(err)
-              return None, None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
+          if load_thresholds(THRESHOLDS_CSV_PATH, logger) is None: # Attempt load again just in case
+               err = f"CRITICAL ERROR: Threshold load FAILED. File '{THRESHOLDS_CSV_PATH}' could not be loaded or is empty. Cannot proceed."
+               logger.error(err)
+               return None, None, err, station_name, actual_start_date_str, actual_end_date_str, units, None, None
 
     # 1. Determine Thresholds to Use
     # This logic replaces the previous block #1
@@ -319,24 +320,37 @@ def generate_plot_for_site(
     df = None # Explicitly initialize df here
     try:
         # --- Define API Date Range ---
-        current_date = datetime.now().strftime('%Y-%m-%d')
-        api_end_dt = datetime.now()
-        v_end_date = validate_date(end_date_str_requested)
-        if not is_reset and v_end_date: api_end_dt = v_end_date
-        api_end_date_str = min(api_end_dt.strftime('%Y-%m-%d'), current_date)
+        # MODIFICATION: Use current date from datetime for consistency
+        current_date_dt = datetime.now()
+        current_date_str = current_date_dt.strftime('%Y-%m-%d')
 
-        api_start_dt = datetime(1900, 1, 1)
+        api_end_dt = current_date_dt # Default to now
+        v_end_date = validate_date(end_date_str_requested)
+        if not is_reset and v_end_date:
+             api_end_dt = v_end_date # Use requested end date if valid and not reset
+
+        # Ensure API end date is not in the future
+        api_end_dt = min(api_end_dt, current_date_dt)
+        api_end_date_str = api_end_dt.strftime('%Y-%m-%d')
+
+        api_start_dt = datetime(1900, 1, 1) # Default very old start
         v_start_date = validate_date(start_date_str_requested)
-        if not is_reset and v_start_date: api_start_dt = v_start_date
+        if not is_reset and v_start_date:
+            api_start_dt = v_start_date # Use requested start date if valid and not reset
         api_start_date_str = api_start_dt.strftime('%Y-%m-%d')
 
-        if api_start_date_str > api_end_date_str:
+        # Swap if start > end after validation/defaults
+        if api_start_dt > api_end_dt:
              logger.warning(f"API date range invalid ({api_start_date_str} > {api_end_date_str}). Swapping dates.")
              api_start_date_str, api_end_date_str = api_end_date_str, api_start_date_str
+             # Also swap the datetime objects for consistency in later logic if needed
+             api_start_dt, api_end_dt = api_end_dt, api_start_dt
+
 
         logger.info(f"API Call Date Range: Start='{api_start_date_str}', End='{api_end_date_str}'")
 
         # --- Fetch ---
+        # Updated on 2025-04-28: Assuming the API endpoint might change, check documentation. Keeping original for now.
         api_url = f"https://www.waterrights.utah.gov/dvrtdb/daily-chart.asp?station_id={site_id}&start_date={api_start_date_str}&end_date={api_end_date_str}&f=json"
         logger.info(f"Fetching data from API: {api_url}")
         response = requests.get(api_url, timeout=45) # Increased timeout
@@ -454,11 +468,22 @@ def generate_plot_for_site(
     # --- Apply Specific Qualifiers for September ---
     if 'Date' in df_processed.columns:
         try:
-            now_dt = datetime.now()
-            qualifier_datetime_str = now_dt.strftime('%Y-%m-%d %H:%M') # Using local time
+            # Use datetime.now() for the qualifier timestamp
+            # Using Salt Lake City timezone as per context (MDT/MST) - requires 'pytz'
+            # If pytz is not available, fall back to naive local time
+            try:
+                import pytz
+                slc_tz = pytz.timezone('America/Denver')
+                now_dt_slc = datetime.now(slc_tz)
+                qualifier_datetime_str = now_dt_slc.strftime('%Y-%m-%d %H:%M %Z%z') # Include timezone info
+            except ImportError:
+                logger.warning("pytz library not found. Using naive local time for September qualifier timestamp.")
+                now_dt = datetime.now()
+                qualifier_datetime_str = now_dt.strftime('%Y-%m-%d %H:%M') # Naive local time
+
             september_qualifier = {
                 "Qualifier#1": "Qualifier-Edits Introduced",
-                "Person": "Adel Abdallah",
+                "Person": "Adel Abdallah", # Or appropriate name/system identifier
                 "DateTime": qualifier_datetime_str
             }
             september_mask = df_processed['Date'].dt.month == 9
@@ -467,18 +492,23 @@ def generate_plot_for_site(
             if num_sept_rows > 0:
                 logger.info(f"Applying September qualifiers to {num_sept_rows} rows...")
                 indices_to_update = df_processed.loc[september_mask].index
-                # Use .loc with index to assign the dictionary; direct assignment might warn/fail
+                # Use .at with index to assign the dictionary; handles single cell assignment correctly
                 for index in indices_to_update:
-                     current_qual = df_processed.loc[index, 'Qualifiers']
+                     # current_qual = df_processed.at[index, 'Qualifiers'] # Get current if merging needed
                      # Decide how to handle existing qualifiers: overwrite or merge? Overwriting for now.
-                     df_processed.loc[index, 'Qualifiers'] = september_qualifier.copy() # Assign copy
+                     # Use .at for setting single value by label - FIX for "Incompatible indexer" error
+                     df_processed.at[index, 'Qualifiers'] = september_qualifier.copy() # Assign copy using .at
                 logger.info("September qualifiers applied.")
             else:
                 logger.info("No data points found in September within the current date range. No example qualifiers applied.")
         except AttributeError as e:
-            logger.error(f"Error accessing '.dt' accessor, likely 'Date' column is not datetime type: {e}")
+             logger.error(f"Error accessing '.dt' accessor, likely 'Date' column is not datetime type: {e}")
         except Exception as e:
-            logger.error(f"An unexpected error occurred during September qualifier application: {e}", exc_info=True)
+             # Log the specific error from the traceback provided by user
+             logger.error(f"An unexpected error occurred during September qualifier application: {e}", exc_info=True)
+             # Add specific logging for the known previous error if it occurs again
+             if "Incompatible indexer with Series" in str(e):
+                 logger.error("Specifically caught the 'Incompatible indexer' error during September qualifier assignment.")
     else:
         logger.warning("Cannot apply September qualifiers because 'Date' column is missing in df_processed.")
 
@@ -487,6 +517,7 @@ def generate_plot_for_site(
     if 'Date' in df_processed.columns and not df_processed.empty:
         latest_date = df_processed['Date'].max()
         if pd.notna(latest_date):
+             # Use DateOffset for reliable year subtraction
              one_year_ago = latest_date - pd.DateOffset(years=1)
              logger.info(f"Applying ReviewStatus: Dates > {one_year_ago.strftime('%Y-%m-%d')} marked as 'Raw', others 'Reviewed'.")
              df_processed['ReviewStatus'] = 'Reviewed' # Default
@@ -602,7 +633,7 @@ def generate_plot_for_site(
          line=dict(color=COLOR_UNKNOWN, width=1.5), connectgaps=False,
          showlegend=True, legendgroup="discharge_unknown",
          hovertext=df_processed['line_hovertext'].where(mask_unknown), hoverinfo='text'
-     ))
+      ))
     logger.debug("Finished adding segmented discharge line traces.")
 
 
@@ -656,27 +687,27 @@ def generate_plot_for_site(
 
             # Min Threshold Line (only if > 0)
             if pd.notna(min_val_thresh) and min_val_thresh > 0:
-                fig.add_trace(go.Scatter(
-                    x=plot_date_range, y=[min_val_thresh]*2, mode='lines',
-                    name=f"Min Threshold ({fmt_min})", line=dict(color="gray", dash="dash", width=1),
-                    hoverinfo='skip', showlegend=True # Skip hover for threshold lines
-                ))
+                 fig.add_trace(go.Scatter(
+                     x=plot_date_range, y=[min_val_thresh]*2, mode='lines',
+                     name=f"Min Threshold ({fmt_min})", line=dict(color="gray", dash="dash", width=1),
+                     hoverinfo='skip', showlegend=True # Skip hover for threshold lines
+                 ))
 
             # Max Threshold Line and Buffer
             if pd.notna(max_val_thresh):
-                max_threshold_label = f"Estimated Max Capacity ({fmt_max})"
-                fig.add_trace(go.Scatter(
-                    x=plot_date_range, y=[max_val_thresh]*2, mode='lines',
-                    name=max_threshold_label, line=dict(color="purple", dash="dash", width=1.5),
-                    hoverinfo='skip', showlegend=True # Skip hover for threshold lines
-                ))
-                # Add gradient buffer above max threshold if valid
-                if max_val_thresh > 0 and len(df_processed['Date']) >= 2:
-                    buffer_amount = max_val_thresh * BUFFER_PERCENTAGE
-                    logger.debug(f"Adding gradient buffer above Max Thr (Amount: {buffer_amount:.2f})")
-                    # Gradient buffer already uses hoverinfo='skip'
-                    add_gradient_buffer(fig, df_processed['Date'], max_val_thresh, buffer_amount,
-                                        BUFFER_START_COLOR_RGBA, BUFFER_END_COLOR_RGBA, BUFFER_NUM_BANDS, logger)
+                 max_threshold_label = f"Estimated Max Capacity ({fmt_max})"
+                 fig.add_trace(go.Scatter(
+                     x=plot_date_range, y=[max_val_thresh]*2, mode='lines',
+                     name=max_threshold_label, line=dict(color="purple", dash="dash", width=1.5),
+                     hoverinfo='skip', showlegend=True # Skip hover for threshold lines
+                 ))
+                 # Add gradient buffer above max threshold if valid
+                 if max_val_thresh > 0 and len(df_processed['Date']) >= 2:
+                     buffer_amount = max_val_thresh * BUFFER_PERCENTAGE
+                     logger.debug(f"Adding gradient buffer above Max Thr (Amount: {buffer_amount:.2f})")
+                     # Gradient buffer already uses hoverinfo='skip'
+                     add_gradient_buffer(fig, df_processed['Date'], max_val_thresh, buffer_amount,
+                                         BUFFER_START_COLOR_RGBA, BUFFER_END_COLOR_RGBA, BUFFER_NUM_BANDS, logger)
 
 
     # --- 4 & 5. Add Review Status Bar and Legend Header ---
@@ -748,8 +779,9 @@ def generate_plot_for_site(
 
     # Add actual status bar traces (using hoverinfo='text' to show hover_text)
     # Assign to secondary y-axis (y2)
-    text_font_reviewed_raw = dict(color='white', size=PROGRESS_BAR_TEXT_SIZE)
-    text_font_unknown = dict(color='black', size=PROGRESS_BAR_TEXT_SIZE) # Different color for visibility on orange
+    # Define fonts using the (potentially updated) constant size
+    text_font_reviewed_raw = dict(color='white', size=PROGRESS_BAR_TEXT_SIZE) # Will use updated size
+    text_font_unknown = dict(color='black', size=PROGRESS_BAR_TEXT_SIZE) # Will use updated size
 
     if reviewed_bar_x: fig.add_trace(go.Bar(
         x=reviewed_bar_x, y=[REVIEW_BAR_Y_VALUE] * len(reviewed_bar_x), width=reviewed_bar_widths, base=0,
@@ -812,26 +844,33 @@ def generate_plot_for_site(
 
     # 9. Finalize Main Plot Figure Layout
     logger.debug("Finalizing main plot figure layout...")
+    # --- MODIFICATION: Increased Gap ---
     progress_bar_height = 0.08 # Relative height for the status bar domain
-    main_plot_domain_start = progress_bar_height + 0.02 # Start main plot above status bar + gap
-    legend_main_title = "<b>Data Quality Flags</b><br><i>Qualified data is set<br>for Sept as an example</i><br>"
+    # main_plot_domain_start = progress_bar_height + 0.02 # Original gap
+    main_plot_domain_start = progress_bar_height + 0.04 # Start main plot above status bar + INCREASED gap
+    legend_main_title = "<b>Data Quality Flags</b><br><i>Qualified data is set<br>for Sept as an example</i><br>" # Content remains same
 
+    # --- MODIFICATION: Doubled Font Sizes ---
     fig.update_layout(
-        title=dict(text=plot_title, x=0.5, y=0.97, font_size=18), # Slightly smaller title
+        # title=dict(text=plot_title, x=0.5, y=0.97, font_size=18), # Original title
+        title=dict(text=plot_title, x=0.5, y=0.97, font_size=36), # Doubled title size
+
         xaxis=dict(
             title_text="", # No x-axis title
-            title_font_size=14, tickfont_size=12,
+            # title_font_size=14, tickfont_size=12, # Original sizes
+            tickfont_size=24, # Doubled tick size
             showline=False, zeroline=True, zerolinewidth=1.5, zerolinecolor='darkgrey',
             # rangeslider=dict(visible=True) # Optional: Add rangeslider
         ),
         yaxis=dict(
             title_text=f"Discharge ({units})",
-            title_font_size=14, tickfont_size=12,
+            # title_font_size=14, tickfont_size=12, # Original sizes
+            title_font_size=28, tickfont_size=24, # Doubled sizes
             showline=False, zeroline=True, zerolinewidth=1.5, zerolinecolor='darkgrey',
-            domain=[main_plot_domain_start, 1.0] # Main plot occupies upper part
+            domain=[main_plot_domain_start, 1.0] # Use updated domain start with larger gap
         ),
         yaxis2=dict( # Secondary y-axis for the status bar
-            domain=[0, progress_bar_height], # Occupies bottom part
+            domain=[0, progress_bar_height], # Occupies bottom part (uses original height)
             visible=False, # Hide axis labels/ticks
             showticklabels=False, showgrid=False, zeroline=False,
             fixedrange=True # Prevent zooming/panning on status bar axis
@@ -840,16 +879,18 @@ def generate_plot_for_site(
         legend=dict(
             yanchor="top", y=0.98, xanchor="left", x=1.01, # Position legend outside plot area
             bgcolor="rgba(255,255,255,0.8)", bordercolor="LightGrey", borderwidth=1,
-            font_size=11,
+            # font_size=11, # Original size
+            font_size=22, # Doubled legend item size
             tracegroupgap=10, # Space between legend groups
-            title=dict(text=legend_main_title, font=dict(size=12)),
+            # title=dict(text=legend_main_title, font=dict(size=12)), # Original legend title size
+            title=dict(text=legend_main_title, font=dict(size=24)), # Doubled legend title size
             # Allow toggling traces by clicking legend items
             itemclick='toggle',
             itemdoubleclick='toggle',
         ),
         template="plotly_white", # Use a clean template
-        margin=dict(t=60, r=250, b=40, l=80), # Adjust margins (increased right for legend)
-        height=650, # Set plot height
+        margin=dict(t=60, r=250, b=40, l=80), # Adjust margins (increased right for legend - might need more with large fonts)
+        height=650, # Set plot height (might need increasing if large fonts make things cramped)
         hovermode='closest', # Show hover for the single closest point
         shapes=review_dividing_lines, # Add the divider lines to the layout
         clickmode='event+select' # Enable click events for interactivity
