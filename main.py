@@ -231,13 +231,194 @@ def get_initial_input_table_data(num_rows: int = NUM_INPUT_ROWS) -> List[Dict[st
     """Generates the initial empty data structure for the input DataTable."""
     return [{'Date': None, 'Discharge': None, 'Qualifier': None} for _ in range(num_rows)]
 
+
 # --- Dash App Layout ---
-logger.info("Defining simplified layout...") # Add log
-app.layout = html.Div([
-    html.H1("App Loaded - Test Layout"),
-    dcc.Location(id='url', refresh=False) # Keep location if needed by callbacks you might test later
-])
-logger.info("Simplified layout defined.") # Add log
+app.layout = dbc.Container([
+    # Stores and Location
+    # ... (keep existing stores and location) ...
+    dcc.Location(id='url', refresh=False),
+    dcc.Store(id='data-store'),
+    dcc.Store(id='site-info-store'),
+    dcc.Store(id='thresholds-store'),
+    dcc.Store(id='clicked-point-store'),
+
+
+    # Header and Disclaimer
+    # ... (keep existing header) ...
+    html.H3("Disclaimer: App for internal use, testing, and demonstration purposes", style={'color': 'red', 'textAlign': 'center'}),
+    html.H1(id='main-title', children="Data Quality Analysis", style={'textAlign': 'center'}),
+    html.Hr(),
+
+
+    # Notification Area
+    # ... (keep existing notification area) ...
+    dbc.Row(dbc.Col(html.Div(id='notification-area'), width=12)),
+
+
+    # --- Control Card ---
+    # ... (keep existing control card, including the 'Add Data' button) ...
+    dbc.Card(dbc.CardBody([
+        dbc.Row([
+            # Site ID Input
+            dbc.Col([
+                dbc.Label("Site ID:", html_for="site-id-input", className="fw-bold"),
+                dbc.Input(id="site-id-input", type="text", placeholder="Enter Site ID", required=True, persistence=True, persistence_type='session')
+            ], md=2),
+            # Date Pickers
+            dbc.Col([
+                dbc.Label("Start Date:", html_for="start-date-picker", className="fw-bold"),
+                dcc.DatePickerSingle(id='start-date-picker', display_format='YYYY-MM-DD', persistence=True, persistence_type='session')
+            ], md=2),
+            dbc.Col([
+                dbc.Label("End Date:", html_for="end-date-picker", className="fw-bold"),
+                dcc.DatePickerSingle(id='end-date-picker', display_format='YYYY-MM-DD', persistence=True, persistence_type='session')
+            ], md=2),
+            # Action Buttons
+            dbc.Col([
+                dbc.Button("Update Plot", id="update-button", color="primary", className="me-1 mt-4"),
+                dbc.Button("Reset Range", id="reset-button", color="secondary", outline=True, className="me-1 mt-4"),
+                # --- UPDATED BUTTONS ---
+                dbc.Button("Record a measurement  Data", id="open-enter-data-modal-button", color="info", outline=True, className="me-1 mt-4", n_clicks=0),
+                dbc.Button("Add Data", id="open-add-multiple-modal-button", color="success", outline=True, className="mt-4", n_clicks=0) # Keep Button
+                # --- END UPDATED BUTTONS ---
+            ], md=4, className="d-flex align-items-end flex-wrap"), # Added flex-wrap for responsiveness
+            # Quick Date Selection
+            dbc.Col([
+                dbc.Label("Quick Dates:", className="fw-bold d-block"),
+                dbc.ButtonGroup([
+                    dbc.Button("Last Year", id="quick-year-button", outline=True, color="info", size="sm"),
+                    dbc.Button("Last Month", id="quick-month-button", outline=True, color="info", size="sm")
+                ], className="mt-2")
+            ], md=2, className="text-center"),
+        ], align="start", className="mb-3"),
+    ]), className="mb-3 shadow-sm"),
+
+    # --- Thresholds & Stats Row ---
+    # ... (keep existing thresholds & stats row) ...
+     dbc.Row([
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H4("Adjust QC Thresholds", className="card-title"),
+            html.Div(id='threshold-form-content', children=html.P("Load data to view/edit thresholds."))
+        ]), className="mb-3 shadow-sm"), md=6),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H4("Statistics", className="card-title"),
+            html.Div(id="statistics-display", children="Load data to view statistics.")
+        ]), className="mb-3 shadow-sm"), md=6),
+    ]),
+
+    # --- Main Plot ---
+    # ... (keep existing plot row) ...
+    dbc.Row(dbc.Col(dcc.Graph(id='main-plot', config={'scrollZoom': True}), width=12)),
+    html.Hr(),
+
+
+    # --- Data Table Section (Collapsible) ---
+    # ... (keep existing main data table section) ...
+     dbc.Row([
+        dbc.Col([
+            # Heading and Toggle Button
+            dbc.Row([
+                dbc.Col(html.H4("Data Table"), width="auto"),
+                dbc.Col(dbc.Button("Show/Hide Table", id="toggle-table-button", color="secondary", outline=True, size="sm", n_clicks=0), width="auto")
+            ], align="center", className="mt-3 mb-2"),
+            # Collapsible Content
+            dbc.Collapse(
+                id="table-collapse",
+                is_open=True, # Start visible
+                children=[
+                    html.P("(Discharge column is editable)", className="small text-muted"),
+                    dbc.Alert(id='table-edit-status', children="Click 'Save Changes' below after editing.", color="info", is_open=False, dismissable=True),
+                    html.Div(id='table-container', children=dbc.Alert("Load data to view table.", color="secondary")),
+                    dbc.Button("Save Changes", id="save-button", color="success", className="mt-2", n_clicks=0, disabled=True),
+                    html.Div(id="save-status", className="mt-1")
+                ]
+            )
+        ], width=12)
+    ]),
+
+
+    # --- Modals ---
+    # QC Action Modal
+    # ... (keep existing QC modal) ...
+    dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle("Quality Control Action")),
+        dbc.ModalBody("Point details...", id="qc-modal-body"),
+        dbc.ModalFooter([
+            dbc.Button("Approve", id="qc-approve-button", color="success", className="ms-1", n_clicks=0),
+            dbc.Button("Interpolate", id="qc-interpolate-button", color="warning", className="ms-1", n_clicks=0),
+            dbc.Button("Delete (Set to NaN)", id="qc-delete-button", color="danger", className="ms-1", n_clicks=0),
+            dbc.Button("Close", id="qc-close-button", color="secondary", className="ms-auto", n_clicks=0)
+        ])
+    ], id="qc-action-modal", is_open=False, centered=True),
+
+    # Enter Data Modal (Single Entry)
+    # ... (keep existing single entry modal) ...
+    dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle("Enter New Measurement")),
+        dbc.ModalBody([
+            dbc.Alert(id="enter-data-modal-alert", color="danger", is_open=False, duration=4000),
+            dbc.Row([
+                dbc.Label("Date:", width=2),
+                dbc.Col(dcc.DatePickerSingle(id='enter-date-picker', display_format='YYYY-MM-DD', date=date.today().isoformat()), width=10)
+            ], className="mb-3"),
+            dbc.Row([
+                dbc.Label("Discharge:", width=2),
+                dbc.Col(dbc.Input(id='enter-discharge-input', type='number', placeholder="Enter value", step="any"), width=10)
+            ], className="mb-3"),
+                dbc.Row([
+                dbc.Label("Qualifier:", width=2),
+                dbc.Col(dbc.Input(id='enter-qualifier-input', type='text', placeholder="Optional: e.g., Manual Entry, Ice", value="Manual Entry"), width=10)
+            ], className="mb-3"),
+        ]),
+        dbc.ModalFooter([
+            dbc.Button("Submit Measurement", id="submit-enter-data-button", color="primary", n_clicks=0),
+            dbc.Button("Cancel", id="cancel-enter-data-button", color="secondary", className="ms-auto", n_clicks=0)
+        ])
+    ], id="enter-data-modal", is_open=False, centered=True),
+
+    # --- MODIFIED MODAL: Add Multiple Data Points via Table ---
+    dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle("Add Multiple Measurements (Paste from Spreadsheet)")),
+        dbc.ModalBody([
+            # Feedback area inside this modal
+            dbc.Alert(id="add-multiple-data-modal-alert", color="danger", is_open=False, duration=5000),
+            # Instructions
+            html.P([
+                "Paste data from a spreadsheet (up to ",
+                f"{NUM_INPUT_ROWS} rows) into the table below. ",
+                html.Strong("Required columns: Date (YYYY-MM-DD), Discharge."),
+                " Qualifier is optional."]),
+            # Input DataTable
+            dash_table.DataTable(
+                id='add-data-input-table',
+                columns=INPUT_TABLE_COLUMNS,
+                data=get_initial_input_table_data(), # Initialize with blank rows
+                editable=True,
+                row_deletable=False, # Keep simple for now, user can clear rows
+                style_table={'overflowX': 'auto', 'maxHeight': '50vh', 'overflowY': 'auto'}, # Make table scrollable
+                 style_cell={
+                    'textAlign': 'left',
+                    'padding': '5px',
+                    'minWidth': '100px',
+                    'width': '150px',
+                    'maxWidth': '200px',
+                 },
+                style_header={
+                    'backgroundColor': 'rgb(230, 230, 230)',
+                    'fontWeight': 'bold'
+                 },
+                 style_data_conditional=[ # Highlight editable
+                    {'if': {'column_editable': True}, 'backgroundColor': 'rgb(240, 248, 255)'}
+                 ]
+            )
+        ]),
+        dbc.ModalFooter([
+            dbc.Button("Submit Added Data", id="submit-multiple-data-button", color="primary", n_clicks=0),
+            dbc.Button("Cancel", id="cancel-multiple-data-button", color="secondary", className="ms-auto", n_clicks=0)
+        ])
+    ], id="add-multiple-data-modal", is_open=False, centered=True, size="lg"), # Use large size
+
+], fluid=True)
 
 # --- Callbacks ---
 
