@@ -11,7 +11,7 @@ runtime: python39
 # - <your_main_python_file>: The name of your Python file without '.py' (e.g., main_dash_app)
 # - <flask_server_variable>: The variable in your Python file assigned to 'app.server' (we used 'server')
 # - '-b :$PORT': Binds Gunicorn to the port provided by App Engine.
-entrypoint: gunicorn -b :$PORT main_dash_app:server
+entrypoint: gunicorn -b :$PORT main:server
 
 # --- Instance Class and Scaling (Example for Standard Environment) ---
 # Controls the computing resources and how the app scales.
