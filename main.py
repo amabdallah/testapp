@@ -1,7 +1,7 @@
 # main.py (Modified for improved exception logging)
 # -*- coding: utf-8 -*-
 # --- Imports ---
-import dash
+from dash import Dash
 from dash import dcc, html, dash_table, Input, Output, State, callback, no_update, ctx
 import dash_bootstrap_components as dbc
 
