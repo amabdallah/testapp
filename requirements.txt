@@ -1,14 +1,2 @@
-# Core Dash & Components
-dash==2.17.0
-dash-bootstrap-components==1.6.0
-
-# Web Server
-gunicorn==23.0.0
-
-# Plotting & Data
-plotly==5.22.0
-pandas==2.2.2
-numpy==1.26.4
-
-# HTTP Requests (If your app directly uses it)
-requests==2.31.0
+dash
+gunicorn
