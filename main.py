@@ -1909,4 +1909,6 @@ if __name__ == '__main__':
         logger.critical("CRITICAL ERROR: Failed to start local development server!", exc_info=True)
         sys.exit(1) # Exit if local server fails to start
 
+server = app.server
+
 # --- END main.py ---
