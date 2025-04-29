@@ -444,6 +444,6 @@ def index():
 
 
 # --- Main Execution Block ---
-if __name__ == '__main__':
-    app.logger.info(f"Starting Flask development server on http://127.0.0.1:5000")
-    app.run(host='127.0.0.1', port=5000, debug=True) # Use reloader for development
+if __name__ == "__main__":
+    is_debug = os.environ.get("FLASK_ENV") == "development"
+    app.run(host="0.0.0.0", port=5000, debug=is_debug, use_reloader=is_debug)
