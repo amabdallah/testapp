@@ -1,7 +1,11 @@
 # main.py (Modified for improved exception logging)
 # -*- coding: utf-8 -*-
 # --- Imports ---
+import dash
 from dash import Dash
+import os
+import sys
+import logging
 from dash import dcc, html, dash_table, Input, Output, State, callback, no_update, ctx
 import dash_bootstrap_components as dbc
 
@@ -1890,10 +1894,7 @@ except Exception as callback_reg_e:
 # (other imports and setup...)
 
 app = Dash(__name__)
-
-# --- ADD THIS EARLIER ---
 server = app.server
-
 
 if __name__ == '__main__':
     try:
