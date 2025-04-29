@@ -1887,28 +1887,30 @@ except Exception as callback_reg_e:
 # --- Main Execution Block ---
 # This block is primarily for LOCAL development.
 # Gunicorn runs the 'server' object directly in production (Cloud Run).
+# (other imports and setup...)
+
+app = Dash(__name__)
+
+# --- ADD THIS EARLIER ---
+server = app.server
+
+
 if __name__ == '__main__':
     try:
         port = int(os.environ.get("PORT", 8050))
-        # Default debug to False unless explicitly set to True via env var
-        debug_env = os.environ.get("DASH_DEBUG", "False").lower() # Default to 'False'
+        debug_env = os.environ.get("DASH_DEBUG", "False").lower()
         debug_mode = debug_env == "true"
 
         logger.info(f"Starting Dash server locally on http://127.0.0.1:{port}")
-        logger.info(f" -> Debug mode: {'ON' if debug_mode else 'OFF'} (Set via DASH_DEBUG env var, defaults to False)")
+        logger.info(f" -> Debug mode: {'ON' if debug_mode else 'OFF'}")
 
-        # Use 0.0.0.0 for host if running inside a local Docker container for testing
-        # Use 127.0.0.1 if running directly on host machine
         host_ip = '0.0.0.0' if os.environ.get('DOCKER_CONTAINER') else '127.0.0.1'
         logger.info(f" -> Host: {host_ip}")
 
         app.run(host=host_ip, port=port, debug=debug_mode)
 
     except Exception as main_run_e:
-        # --- MODIFICATION: Log errors occurring in the __main__ block ---
         logger.critical("CRITICAL ERROR: Failed to start local development server!", exc_info=True)
-        sys.exit(1) # Exit if local server fails to start
-
-server = app.server
+        sys.exit(1)
 
 # --- END main.py ---
