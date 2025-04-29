@@ -29,4 +29,4 @@ EXPOSE 8080
 # inside the 'app.py' file.
 # We bind to 0.0.0.0 to accept connections from any IP address (necessary inside the container).
 # We bind to port 8080 as expected by Cloud Run default.
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:server"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "main:server"]
