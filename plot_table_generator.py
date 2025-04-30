@@ -845,9 +845,9 @@ def generate_plot_for_site(
     # 9. Finalize Main Plot Figure Layout
     logger.debug("Finalizing main plot figure layout...")
     # --- MODIFICATION: Increased Gap ---
-    progress_bar_height = 0.08 # Relative height for the status bar domain
+    progress_bar_height = 0.1 # Relative height for the status bar domain
     # main_plot_domain_start = progress_bar_height + 0.02 # Original gap
-    main_plot_domain_start = progress_bar_height + 0.04 # Start main plot above status bar + INCREASED gap
+    main_plot_domain_start = progress_bar_height + 0.4 # Start main plot above status bar + INCREASED gap
     legend_main_title = "<b>Data Quality Flags</b><br><i>Qualified data is set<br>for Sept as an example</i><br>" # Content remains same
 
     # --- MODIFICATION: Doubled Font Sizes ---
