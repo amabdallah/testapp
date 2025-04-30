@@ -1,4 +1,4 @@
-# main_dash_app.py
+# main.py
 # -*- coding: utf-8 -*-
 # --- Imports ---
 import dash
@@ -1427,4 +1427,4 @@ if __name__ == '__main__':
     logger.info(f" -> Debug mode: {'ON' if debug_mode else 'OFF'}")
     app.run(host='127.0.0.1', port=port, debug=debug_mode)
 
-# --- END main_dash_app.py ---
+# --- END main.py ---
