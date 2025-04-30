@@ -591,7 +591,7 @@ def generate_plot_for_site(
 
     # 7. Create Plot Figure
     logger.info("Creating main Plotly time series figure...")
-    plot_title = f"Data for {station_name} ({site_id}) | {actual_start_date_str} to {actual_end_date_str}"
+    plot_title = f"{units} data for {station_name} ({site_id}) | {actual_start_date_str} to {actual_end_date_str}"
     fig = go.Figure() # Initialize the figure object
 
 
@@ -847,7 +847,7 @@ def generate_plot_for_site(
     # --- MODIFICATION: Increased Gap ---
     progress_bar_height = 0.1 # Relative height for the status bar domain
     # main_plot_domain_start = progress_bar_height + 0.02 # Original gap
-    main_plot_domain_start = progress_bar_height + 0.4 # Start main plot above status bar + INCREASED gap
+    main_plot_domain_start = progress_bar_height + 0.1 # Start main plot above status bar + INCREASED gap
     legend_main_title = "<b>Data Quality Flags</b><br><i>Qualified data is set<br>for Sept as an example</i><br>" # Content remains same
 
     # --- MODIFICATION: Doubled Font Sizes ---
@@ -863,7 +863,7 @@ def generate_plot_for_site(
             # rangeslider=dict(visible=True) # Optional: Add rangeslider
         ),
         yaxis=dict(
-            title_text=f"Discharge ({units})",
+            title_text=f"{units}",
             # title_font_size=14, tickfont_size=12, # Original sizes
             title_font_size=28, tickfont_size=24, # Doubled sizes
             showline=False, zeroline=True, zerolinewidth=1.5, zerolinecolor='darkgrey',
