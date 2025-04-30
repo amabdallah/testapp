@@ -38,4 +38,4 @@ EXPOSE 8080
 # --threads: Number of threads per worker (useful for I/O bound tasks)
 # --timeout 0: Disables the worker timeout (useful for long callbacks, but use with caution)
 # Use 'exec' to replace the shell process with gunicorn, ensuring signals are handled correctly.
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 app:server
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:server
