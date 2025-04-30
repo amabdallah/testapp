@@ -1,49 +1,41 @@
-# ---- Base Stage ----
-FROM python:3.11-slim AS base
+# --- Base Image ---
+# Use an official Python runtime as a parent image
+# Using python:3.9-slim as an example, adjust if you need a different version
+FROM python:3.9-slim
 
-# Prevent Python from writing pyc files and buffering stdout/stderr
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+# --- Environment Variables ---
+# Set environment variables to prevent Python from buffering stdout/stderr
+ENV PYTHONUNBUFFERED True
+# Set the working directory in the container
+ENV APP_HOME /app
+WORKDIR $APP_HOME
 
-WORKDIR /app
-
-# Create a non-root user and group
-RUN addgroup --system nonroot && adduser --system --ingroup nonroot nonroot
-
-# ---- Builder Stage (Optional but good practice if you have build-time deps) ----
-# FROM base AS builder
-# WORKDIR /app
-# RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpq-dev # Example build deps
-# COPY requirements.txt .
-# RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
-
-# ---- Final Stage ----
-FROM base AS final
-
-WORKDIR /app
-
-# Copy dependencies first to leverage Docker cache
+# --- Install Dependencies ---
+# Copy the requirements file into the container
 COPY requirements.txt .
-# Optional: If using builder stage with wheels:
-# COPY --from=builder /wheels /wheels
-# RUN pip install --no-cache --no-index --find-links=/wheels -r requirements.txt && rm -rf /wheels
-# Standard install:
+# Install packages specified in requirements.txt
+# --no-cache-dir reduces image size
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# --- Copy Application Code ---
+# Copy the current directory contents into the container at /app
+# This includes your app.py, threshold_manager_dash.py, plot_table_generator.py, and thresholds.csv
 COPY . .
 
-# Change ownership to non-root user
-RUN chown -R nonroot:nonroot /app
-
-# Switch to non-root user
-USER nonroot
-
-# Expose the port the app runs on (optional but good documentation)
+# --- Expose Port ---
+# Expose the port the app runs on. GCP services like Cloud Run
+# expect the application to listen on the port specified by the PORT env var (default 8080).
+# Gunicorn will bind to this port via the $PORT variable in the CMD.
+# Exposing it here is good practice but often handled by the cloud environment.
 EXPOSE 8080
 
-# Run the application - Gunicorn will respect PORT env var (default 8080 in Cloud Run)
-# Let Cloud Run/Gunicorn determine workers via WEB_CONCURRENCY if possible
-CMD ["gunicorn", "main:app"]
-# Alternatively, be explicit about binding to $PORT if needed/preferred:
-# CMD ["gunicorn", "-b", "0.0.0.0:${PORT}", "main:app"]
+# --- Run Application ---
+# Define the command to run the application using gunicorn
+# 'app:server' assumes your main script is 'app.py' and your Dash instance is 'app',
+# so the underlying Flask server is 'app.server'. Adjust if your script/variable names differ.
+# Binds to all interfaces (0.0.0.0) on the port specified by the $PORT env var (provided by GCP).
+# --workers: Number of worker processes (adjust based on your instance size/traffic)
+# --threads: Number of threads per worker (useful for I/O bound tasks)
+# --timeout 0: Disables the worker timeout (useful for long callbacks, but use with caution)
+# Use 'exec' to replace the shell process with gunicorn, ensuring signals are handled correctly.
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 app:server
