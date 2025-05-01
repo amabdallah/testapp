@@ -75,31 +75,32 @@ server = app.server
 
 # --- Client-side callback for scrolling ---
 # <<< ADDED: Client-side callback for scroll functionality >>>
+# --- Client-side callback for scrolling ---
 app.clientside_callback(
     """
     function(n_clicks) {
-        // Check if the button was actually clicked (n_clicks > 0)
-        // n_clicks starts at 0 or None, increments on click
         if (n_clicks && n_clicks > 0) {
-            // Find the target element by its ID
-            const element = document.getElementById('data-table-section-header');
-            if (element) {
-                // Scroll the element into view
-                element.scrollIntoView({
-                    behavior: 'smooth', // Use smooth scrolling
-                    block: 'start'      // Align the top of the element to the top of the viewport
-                });
-            } else {
-                console.warn("Scroll target 'data-table-section-header' not found.");
-            }
+            // Introduce a small delay (e.g., 100 milliseconds)
+            setTimeout(function() {
+                const element = document.getElementById('data-table-section-header');
+                if (element) {
+                    console.log("Found element, attempting scroll..."); // Added for debugging
+                    element.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                } else {
+                    // This warning might still appear if 100ms isn't enough,
+                    // but it's less likely.
+                    console.warn("Scroll target 'data-table-section-header' not found after delay.");
+                }
+            }, 100); // Delay in milliseconds
         }
-        // No Dash output needs to be updated by this callback
         return window.dash_clientside.no_update;
     }
     """,
-    # No Output needed, the callback performs a browser action directly
     Input('edit-data-button', 'n_clicks'),
-    prevent_initial_call=True # Important to prevent firing on page load
+    prevent_initial_call=True
 )
 # <<< END: Client-side callback section >>>
 
