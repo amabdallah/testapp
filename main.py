@@ -4,7 +4,7 @@ import dash
 from dash import dcc, html, dash_table, Input, Output, State, callback, no_update, ctx
 import dash_bootstrap_components as dbc
 
-import logsging
+import logging
 import os
 import sys
 from datetime import datetime, timedelta, date # Added date
