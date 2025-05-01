@@ -4,7 +4,7 @@ import dash
 from dash import dcc, html, dash_table, Input, Output, State, callback, no_update, ctx
 import dash_bootstrap_components as dbc
 
-import logging
+import logsging
 import os
 import sys
 from datetime import datetime, timedelta, date # Added date
@@ -72,6 +72,37 @@ logger = logging.getLogger('dash_app')
 # --- Initialize Dash App ---
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 server = app.server
+
+# --- Client-side callback for scrolling ---
+# <<< ADDED: Client-side callback for scroll functionality >>>
+app.clientside_callback(
+    """
+    function(n_clicks) {
+        // Check if the button was actually clicked (n_clicks > 0)
+        // n_clicks starts at 0 or None, increments on click
+        if (n_clicks && n_clicks > 0) {
+            // Find the target element by its ID
+            const element = document.getElementById('data-table-section-header');
+            if (element) {
+                // Scroll the element into view
+                element.scrollIntoView({
+                    behavior: 'smooth', // Use smooth scrolling
+                    block: 'start'      // Align the top of the element to the top of the viewport
+                });
+            } else {
+                console.warn("Scroll target 'data-table-section-header' not found.");
+            }
+        }
+        // No Dash output needs to be updated by this callback
+        return window.dash_clientside.no_update;
+    }
+    """,
+    # No Output needed, the callback performs a browser action directly
+    Input('edit-data-button', 'n_clicks'),
+    prevent_initial_call=True # Important to prevent firing on page load
+)
+# <<< END: Client-side callback section >>>
+
 
 # --- Log fcntl status ---
 if not HAS_FCNTL: logger.warning("fcntl module not available. File locking DISABLED.")
@@ -233,7 +264,7 @@ def get_initial_input_table_data(num_rows: int = NUM_INPUT_ROWS) -> List[Dict[st
 
 
 # --- Helper function for building threshold form ---
-# <<< MODIFIED Function Start >>>
+# <<< MODIFIED: Includes Subscribe Buttons >>>
 def build_threshold_form(site_id, thresholds, units):
     if not site_id:
         return html.P("Enter a Site ID and load data to view/edit thresholds.")
@@ -271,7 +302,7 @@ def build_threshold_form(site_id, thresholds, units):
         return html.Div([ html.P(f"Thresholds not currently loaded or set for site {site_id}.", className="text-warning"), form_content])
     else:
         return form_content
-# <<< MODIFIED Function End >>>
+# <<< END: Modified build_threshold_form >>>
 
 
 # --- Dash App Layout ---
@@ -319,11 +350,14 @@ app.layout = dbc.Container([
                 ], className="mt-1 d-flex flex-wrap"), # mt-1 adds space below label, d-flex allows wrapping
 
                 # --- Data Group ---
+                # <<< MODIFIED: Added Edit Data Button >>>
                 dbc.Label("Data:", className="fw-bold d-block mt-3"), # Label for second group, mt-3 adds space above this label
                 html.Div([ # Container for second button group
-                     dbc.Button("Enter Measurement", id="open-enter-data-modal-button", color="info", outline=True, className="me-2", n_clicks=0), # Added me-2 for space within group
-                     dbc.Button("Upload Data", id="open-add-multiple-modal-button", color="success", outline=True, className="", n_clicks=0) # No specific margin needed at end of group
+                     dbc.Button("Enter Measurement", id="open-enter-data-modal-button", color="info", outline=True, className="me-2", n_clicks=0),
+                     dbc.Button("Upload Data", id="open-add-multiple-modal-button", color="success", outline=True, className="me-2", n_clicks=0), # Added me-2
+                     dbc.Button("Edit Data", id="edit-data-button", color="warning", outline=True, className="", n_clicks=0) # Added Edit Button
                 ], className="mt-1 d-flex flex-wrap") # mt-1 adds space below label, d-flex allows wrapping
+                # <<< END: Modified Data Group >>>
 
             # Note: Removed d-flex align-items-end from this dbc.Col to allow natural top alignment for labels
             ], md=4),
@@ -378,10 +412,12 @@ app.layout = dbc.Container([
       dbc.Row([
         dbc.Col([
             # Heading and Toggle Button
+            # <<< MODIFIED: Added ID for scrolling target >>>
             dbc.Row([
                 dbc.Col(html.H4("Data Table"), width="auto"),
                 dbc.Col(dbc.Button("Show/Hide Table", id="toggle-table-button", color="secondary", outline=True, size="sm", n_clicks=0), width="auto")
-            ], align="center", className="mt-3 mb-2"),
+            ], align="center", className="mt-3 mb-2", id="data-table-section-header"), # Added id here
+            # <<< END: Modified Row >>>
             # Collapsible Content
             dbc.Collapse(
                 id="table-collapse",
@@ -410,7 +446,7 @@ app.layout = dbc.Container([
         ])
     ], id="qc-action-modal", is_open=False, centered=True),
 
-    # <<< MODIFIED Modal Start >>>
+    # <<< MODIFIED: Enter Data Modal includes Time input >>>
     # Enter Data Modal (Single Entry)
     dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle("Enter New Measurement")),
@@ -439,7 +475,7 @@ app.layout = dbc.Container([
             dbc.Button("Cancel", id="cancel-enter-data-button", color="secondary", className="ms-auto", n_clicks=0)
         ])
     ], id="enter-data-modal", is_open=False, centered=True),
-    # <<< MODIFIED Modal End >>>
+    # <<< END: Modified Enter Data Modal >>>
 
     # Add Multiple Data Points via Table Modal
     dbc.Modal([
@@ -707,7 +743,16 @@ def update_data_and_plots(
             if is_initial_load and not site_id_to_load:
                  logger.info("Initial load without site ID in URL - showing empty state.")
                  return empty_fig, initial_table_msg, None, None, stats_display, build_threshold_form(None, {}, "?"), main_title, error_alert, True, False, output_site_id, output_start_date, output_end_date
-            return (no_update,) * 13
+            # If trigger was something else (like thresholds-store but not handled above), return no_update
+            # This case might be hit if thresholds-store updates but site_id is not set yet.
+            if triggered_input_id == 'thresholds-store' and not state_site_id:
+                 logger.debug("Threshold update triggered, but no site ID. No plot update.")
+                 # Return current state or empty state? Let's return empty state.
+                 current_start = state_start_date_str or default_start.isoformat()
+                 current_end = state_end_date_str or default_end.isoformat()
+                 return empty_fig, initial_table_msg, None, None, stats_display, build_threshold_form(None, {}, "?"), main_title, error_alert, True, False, None, current_start, current_end
+
+            return (no_update,) * 13 # Return no_update for all outputs
 
 
     except Exception as date_e:
@@ -722,12 +767,17 @@ def update_data_and_plots(
     # --- Data Fetching (only if site_id_to_load is set) ---
     if not site_id_to_load:
          logger.info("No site ID determined for loading. Skipping data fetch.")
-         return empty_fig, initial_table_msg, None, None, stats_display, build_threshold_form(None, {}, "?"), main_title, error_alert, True, False, output_site_id, output_start_date, output_end_date
+         # Ensure UI defaults are set correctly even if no fetch occurs
+         final_output_start = output_start_date if output_start_date is not no_update else default_start.isoformat()
+         final_output_end = output_end_date if output_end_date is not no_update else default_end.isoformat()
+         final_output_site_id = output_site_id if output_site_id is not no_update else None
+         return empty_fig, initial_table_msg, None, None, stats_display, build_threshold_form(None, {}, "?"), main_title, error_alert, True, False, final_output_site_id, final_output_start, final_output_end
 
 
     logger.info(f"Proceeding to fetch data: Site='{site_id_to_load}', Start='{start_date_to_load}', End='{end_date_to_load}', Reset={is_reset_action}, ThresholdTrigger={is_threshold_update}")
 
     try:
+        # Use thresholds from state if trigger was threshold update, otherwise let function load defaults/from file
         thresholds_to_use = current_thresholds_state if is_threshold_update and current_thresholds_state else None
         fig, df_processed, err_func, name_func, final_start, final_end, units_val, found_thresholds, stats_dict = generate_plot_for_site(
             site_id_to_load,
@@ -738,9 +788,12 @@ def update_data_and_plots(
             thresholds_override=thresholds_to_use
             )
 
+        # Store comprehensive site info
         site_info_output = {'site_id': site_id_to_load, 'name': name_func, 'units': units_val, 'start': final_start, 'end': final_end}
+        # Determine thresholds to display in form (use newly found/updated ones preferentially)
         thresholds_for_form = found_thresholds if found_thresholds else (current_thresholds_state if current_thresholds_state else {})
 
+        # Validate dates returned from generate_plot_for_site before using them
         valid_final_start = None
         valid_final_end = None
         if final_start:
@@ -756,42 +809,59 @@ def update_data_and_plots(
              except (ValueError, TypeError):
                   logger.warning(f"generate_plot_for_site returned invalid final_end: {final_end}")
 
+        # Update UI date pickers based on action and valid returned dates
         if is_reset_action and valid_final_start and valid_final_end:
             output_start_date = valid_final_start
             output_end_date = valid_final_end
         elif is_initial_load or is_quick_year or is_quick_month:
-            pass # Keep values determined earlier
-        else: # Regular update or threshold change
+            # Keep output dates determined earlier in the callback
+            pass
+        else: # Regular update or threshold change, keep state dates
              output_start_date = state_start_date_str
              output_end_date = state_end_date_str
 
+        # Handle errors from generate_plot_for_site
         if err_func:
             error_alert = dbc.Alert(f"Error loading data for {site_id_to_load}: {err_func}", color="danger", dismissable=True)
             main_title = f"{name_func or '?'} ({site_id_to_load}) - Data Error"
             threshold_form = build_threshold_form(site_id_to_load, thresholds_for_form, units_val or "?")
-            return empty_fig, initial_table_msg, None, site_info_output, stats_display, threshold_form, main_title, error_alert, True, False, site_id_to_load, output_start_date, output_end_date
+            # Ensure date pickers retain their current values on error
+            final_output_start = output_start_date if output_start_date is not no_update else state_start_date_str
+            final_output_end = output_end_date if output_end_date is not no_update else state_end_date_str
+            return empty_fig, initial_table_msg, None, site_info_output, stats_display, threshold_form, main_title, error_alert, True, False, site_id_to_load, final_output_start, final_output_end
 
+        # Handle case where no data is found for the period
         if fig is None or df_processed is None or df_processed.empty:
             display_start = valid_final_start or start_date_to_load or "N/A"
             display_end = valid_final_end or end_date_to_load or "N/A"
             error_alert = dbc.Alert(f"No data found for site {site_id_to_load} in the selected period ({display_start} to {display_end}).", color="warning", dismissable=True)
             main_title = f"{name_func or '?'} ({site_id_to_load})"
             threshold_form = build_threshold_form(site_id_to_load, thresholds_for_form, units_val or "?")
-            return empty_fig, initial_table_msg, None, site_info_output, stats_display, threshold_form, main_title, error_alert, True, False, site_id_to_load, output_start_date, output_end_date
+            # Ensure date pickers retain their current values
+            final_output_start = output_start_date if output_start_date is not no_update else state_start_date_str
+            final_output_end = output_end_date if output_end_date is not no_update else state_end_date_str
+            return empty_fig, initial_table_msg, None, site_info_output, stats_display, threshold_form, main_title, error_alert, True, False, site_id_to_load, final_output_start, final_output_end
 
         # --- Success Case ---
         logger.info(f"Data loaded successfully for {site_id_to_load}. Range: {final_start} to {final_end}. Units: {units_val}")
         table_component = create_dash_data_table(df_processed.copy(), units_val, 'editable-data-table', logger)
         if not isinstance(table_component, dash_table.DataTable):
-             error_alert = table_component
-             table_component = html.Div()
+             error_alert = table_component # Show alert if table creation failed
+             table_component = html.Div() # Prevent error by providing empty div
              logger.error("Failed to create data table component.")
+             save_disabled = True # Disable save if table fails
+             edit_status_open = False
+        else:
+             save_disabled = False # Enable save if table created
+             edit_status_open = True # Show edit status bar
 
+        # Prepare data for storage (convert datetime back to string)
         df_store = df_processed.copy()
         if 'Date' in df_store.columns:
              df_store['Date'] = df_store['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S')
         stored_data = df_store.to_json(orient='split', date_format='iso')
 
+        # Build Threshold form and Stats display
         threshold_form = build_threshold_form(site_id_to_load, thresholds_for_form, units_val)
         if stats_dict:
              stats_display = html.Div([
@@ -803,24 +873,31 @@ def update_data_and_plots(
         else: stats_display = html.P("Statistics not available.")
 
         main_title = f"{name_func or '?'} ({site_id_to_load}) | {final_start} to {final_end}"
-        save_disabled = False
-        edit_status_open = True
 
-        return fig, table_component, stored_data, site_info_output, stats_display, threshold_form, main_title, error_alert, save_disabled, edit_status_open, site_id_to_load, output_start_date, output_end_date
+        # Ensure final date outputs are correct ISO strings
+        final_output_start = output_start_date if output_start_date is not no_update else valid_final_start
+        final_output_end = output_end_date if output_end_date is not no_update else valid_final_end
+
+        return fig, table_component, stored_data, site_info_output, stats_display, threshold_form, main_title, error_alert, save_disabled, edit_status_open, site_id_to_load, final_output_start, final_output_end
 
     except Exception as e:
         logger.error(f"Unhandled exception during plot/table generation for site {site_id_to_load}: {e}", exc_info=True)
         error_alert = dbc.Alert(f"An unexpected server error occurred: {e}", color="danger", dismissable=True)
         main_title = f"Error Processing {site_id_to_load}"
+        # Attempt to build threshold form even on error
         try:
-             thresholds_state_to_use = get_site_thresholds(site_id_to_load, logger) if site_id_to_load else {}
+             # Use state thresholds if available, else attempt fetch, else empty
+             thresholds_state_to_use = current_thresholds_state if current_thresholds_state else (get_site_thresholds(site_id_to_load, logger) if site_id_to_load else {})
+             if thresholds_state_to_use is None: thresholds_state_to_use = {}
         except Exception as te:
              logger.error(f"Failed to get thresholds after main error: {te}")
              thresholds_state_to_use = {}
         threshold_form = build_threshold_form(site_id_to_load, thresholds_state_to_use, "?")
+
         out_site = site_id_to_load
         default_start_iso = (date.today() - timedelta(days=30)).isoformat()
         default_end_iso = date.today().isoformat()
+        # Ensure date pickers retain state or default
         out_start = output_start_date if output_start_date is not no_update else (state_start_date_str or default_start_iso)
         out_end = output_end_date if output_end_date is not no_update else (state_end_date_str or default_end_iso)
 
@@ -965,6 +1042,7 @@ def handle_table_edit(edited_table_data, stored_json, site_info, thresholds, pre
 
         df_store_orig = pd.read_json(stored_json, orient='split')
         if 'Date' in df_store_orig:
+            # Convert stored dates (likely strings) to datetime for comparison/indexing
             df_store_orig['Date'] = pd.to_datetime(df_store_orig['Date'], errors='coerce')
         else:
              logger.error("Original data store is missing 'Date' column.")
@@ -975,6 +1053,8 @@ def handle_table_edit(edited_table_data, stored_json, site_info, thresholds, pre
             logger.error(f"Edit index {changed_view_idx} is out of bounds for stored DataFrame (length {len(df_store_orig)}).")
             raise IndexError("Edit index mismatch between table view and stored data.")
 
+        # Map the visible row index (from table `data`) to the original DataFrame index
+        # This assumes the order hasn't drastically changed; more robust mapping might be needed if sorting/filtering is complex
         original_df_index = df_store_orig.index[changed_view_idx]
 
         new_value_edited = df_edited.loc[changed_view_idx, 'Discharge']
@@ -993,6 +1073,7 @@ def handle_table_edit(edited_table_data, stored_json, site_info, thresholds, pre
                 new_numeric_value = float(new_value_edited)
             except (ValueError, TypeError):
                 logger.error(f"Invalid numeric input '{new_value_edited}' at view index {changed_view_idx} (Original Index {original_df_index}).")
+                # Revert table display to the original state before the invalid edit
                 reverted_table = create_dash_data_table(df_store_orig.copy(), units, 'editable-data-table', logger)
                 return no_update, reverted_table, dbc.Alert(f"Invalid input: '{new_value_edited}' is not a valid number. Edit reverted.", color="danger"), edit_status_open
 
@@ -1007,6 +1088,7 @@ def handle_table_edit(edited_table_data, stored_json, site_info, thresholds, pre
             elif 'Edited' not in str(current_qual).split(';'):
                  df_updated.loc[original_df_index, 'Qualifiers'] = f"{str(current_qual).strip()};Edited"
         else:
+            # If Qualifiers column doesn't exist, create it
             df_updated['Qualifiers'] = pd.Series(dtype='object')
             df_updated.loc[original_df_index, 'Qualifiers'] = 'Edited'
 
@@ -1017,6 +1099,7 @@ def handle_table_edit(edited_table_data, stored_json, site_info, thresholds, pre
             notification = dbc.Alert("Change applied, but cannot re-flag (thresholds missing). Click 'Save Changes'.", color="warning", duration=5000, dismissable=True)
         else:
             try:
+                # Ensure Date column is datetime before flagging
                 if 'Date' in df_updated and not pd.api.types.is_datetime64_any_dtype(df_updated['Date']):
                      df_updated['Date'] = pd.to_datetime(df_updated['Date'], errors='coerce')
                 df_updated = apply_flagging(df_updated, thresholds, logger)
@@ -1026,21 +1109,25 @@ def handle_table_edit(edited_table_data, stored_json, site_info, thresholds, pre
                 logger.error(f"Error during re-flagging after edit: {flag_e}", exc_info=True)
                 notification = dbc.Alert(f"Change applied, but error during re-flagging: {flag_e}", color="danger", duration=5000, dismissable=True)
 
+        # Prepare updated data for storage (convert datetime back to string)
         df_updated_store = df_updated.copy()
         if 'Date' in df_updated_store and pd.api.types.is_datetime64_any_dtype(df_updated_store['Date']):
             df_updated_store['Date'] = df_updated_store['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S')
         updated_json_output = df_updated_store.to_json(orient='split', date_format='iso')
 
+        # Prepare data for table display (ensure datetime objects for date column)
         df_table_update = df_updated.copy()
         if 'Date' in df_table_update and not pd.api.types.is_datetime64_any_dtype(df_table_update['Date']):
             df_table_update['Date'] = pd.to_datetime(df_table_update['Date'], errors='coerce')
         new_table_component = create_dash_data_table(df_table_update, units, 'editable-data-table', logger)
 
+        # Check if table creation failed
         if not isinstance(new_table_component, dash_table.DataTable):
             logger.error("Failed to recreate DataTable component after edit.")
-            notification = dbc.Alert("Edit applied, but failed to update table display.", color="danger")
-            new_table_component = html.Div("Error updating table.")
-            return updated_json_output, new_table_component, notification, edit_status_open
+            # Provide error message instead of the table component itself
+            original_table_component = create_dash_data_table(df_store_orig.copy(), units, 'editable-data-table', logger) # Show original table
+            notification = dbc.Alert("Edit applied, but failed to update table display. Edit reverted in table.", color="danger")
+            return no_update, original_table_component, notification, edit_status_open # Return no_update for store
 
         logger.info(f"Successfully processed table edit for index {original_df_index}.")
         return updated_json_output, new_table_component, notification, edit_status_open
@@ -1049,13 +1136,16 @@ def handle_table_edit(edited_table_data, stored_json, site_info, thresholds, pre
         logger.error(f"Error handling table edit for site {site_id}: {e}", exc_info=True)
         notification = dbc.Alert(f"Error processing table edit: {e}", color="danger", dismissable=True)
         try:
+            # Attempt to restore the table to its state before the error
             df_original_state = pd.read_json(stored_json, orient='split')
             if 'Date' in df_original_state:
                  df_original_state['Date'] = pd.to_datetime(df_original_state['Date'], errors='coerce')
             original_table_component = create_dash_data_table(df_original_state.copy(), units, 'editable-data-table', logger)
+            # Don't update the data store, revert the table display
             return no_update, original_table_component, notification, edit_status_open
         except Exception as revert_e:
             logger.error(f"Failed to revert table display after edit error: {revert_e}")
+            # If reverting fails, show a generic error message
             return no_update, html.Div("Error displaying table after edit failure."), notification, edit_status_open
 
 
@@ -1077,6 +1167,7 @@ def save_data(n_clicks, stored_json, site_info):
         df_save = pd.read_json(stored_json, orient='split')
         if 'Date' in df_save.columns:
             # NOTE: Adjust if storing full timestamps; strftime format might need change
+            # Format Date as YYYY-MM-DD for CSV output
             df_save['Date'] = pd.to_datetime(df_save['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
             if df_save['Date'].isnull().any(): logger.warning("Some dates were invalid during save conversion.")
         else:
@@ -1088,9 +1179,11 @@ def save_data(n_clicks, stored_json, site_info):
         else:
              df_save['DISCHARGE'] = np.nan
 
+        # Ensure essential columns exist before selecting
         if 'ReviewStatus' not in df_save.columns: df_save['ReviewStatus'] = 'Unknown'
         if 'Qualifiers' not in df_save.columns: df_save['Qualifiers'] = None
 
+        # Recreate Qualified and Active Flags based on potentially modified data
         df_save['Qualified'] = df_save['Qualifiers'].notna().map({True: 'Yes', False: 'No'})
 
         active_flags_list = []; flag_map = {'FLAG_LESS_THAN_Min._Value': 'Below Min', 'FLAG_ZERO': 'Zero', 'FLAG_REPEATED': 'Repeated', 'FLAG_GREATER_THAN_MaxValue': 'Above Max', 'UNUSUAL_SPIKE': 'Spike', 'FLAG_BELOW_CAPACITY': 'Below Capacity'}
@@ -1109,18 +1202,21 @@ def save_data(n_clicks, stored_json, site_info):
 
         df_save['Active Flags'] = active_flags_list
 
+        # Define the desired order and selection of columns for the CSV
         base_columns = ['Date', 'DISCHARGE', 'ReviewStatus', 'Qualifiers', 'Qualified', 'Active Flags']
         flag_columns = ['FLAG_LESS_THAN_Min._Value','FLAG_ZERO','FLAG_REPEATED','FLAG_GREATER_THAN_MaxValue','UNUSUAL_SPIKE','FLAG_BELOW_CAPACITY', 'FLAGGED']
         existing_flag_columns = [col for col in flag_columns if col in df_save.columns]
         columns_to_save_ordered = base_columns + existing_flag_columns
 
+        # Ensure only columns that actually exist in the DataFrame are selected
         columns_that_exist = [col for col in columns_to_save_ordered if col in df_save.columns]
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"edited_data_{site_id}_{timestamp}.csv"
-        save_path = Path(".") / filename
+        save_path = Path(".") / filename # Save in the current working directory
         logger.info(f"Saving columns: {columns_that_exist} to file: {save_path}")
 
+        # Save the selected columns to CSV
         df_save[columns_that_exist].to_csv(save_path, index=False, encoding='utf-8')
 
         logger.info(f"Data for site {site_id} saved successfully to {filename}.")
@@ -1148,19 +1244,25 @@ def display_click_data(clickData, figure):
         if 'data' in figure and 0 <= curve_index < len(figure.get('data', [])):
             trace = figure['data'][curve_index]
             original_index = None
+            # Check if the click was on a marker trace with customdata
             if 'customdata' in point_data and point_data['customdata'] is not None and 'markers' in trace.get('mode', ''):
                 custom_data = point_data['customdata']
+                # Extract original index (assuming it's the first element)
                 if isinstance(custom_data, (list, tuple)) and len(custom_data) > 0:
                     original_index = custom_data[0]
+                # Handle cases where customdata might be a single value
                 elif isinstance(custom_data, (int, str, float)):
                     original_index = custom_data
                 else:
                      logger.warning(f"Unexpected customdata format found: {type(custom_data)}")
 
             if original_index is not None:
+                # Attempt to get flag type info
                 flag_type = "Flagged Point"; point_number = point_data.get('pointNumber', -1)
+                # Prefer 'meta' if available (more specific)
                 if 'meta' in trace and isinstance(trace.get('meta'), list) and 0 <= point_number < len(trace['meta']):
                     flag_type = trace['meta'][point_number]
+                # Fallback to trace name
                 elif 'name' in trace:
                     flag_type = trace.get('name', flag_type)
 
@@ -1173,6 +1275,7 @@ def display_click_data(clickData, figure):
                     html.P([html.Strong("Flag Type: "), html.Span(flag_type)]),
                     html.P(f"(Original Index: {original_index})", className="small text-muted")
                  ])
+                # Store all relevant info for the QC action callback
                 clicked_point_info = {'original_index': original_index, 'date': date_str, 'value': value, 'flag_type': flag_type}
                 open_modal = True
                 logger.info(f"Flagged point clicked: Index={original_index}, Date={date_str}, Value={value_str}, Flag={flag_type}")
@@ -1187,6 +1290,7 @@ def display_click_data(clickData, figure):
     if open_modal:
         return True, modal_body_content, clicked_point_info
     else:
+        # Don't open modal if click wasn't valid or on a non-flagged point
         return False, no_update, None
 
 @callback(
@@ -1209,7 +1313,7 @@ def display_click_data(clickData, figure):
 def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_clicks,
                      clicked_point_data, stored_json, site_info, thresholds, current_figure):
     triggered_button_id = ctx.triggered_id
-    modal_is_open = False
+    modal_is_open = False # Close modal after action by default
     notification = no_update
     updated_data_store = no_update
     updated_table = no_update
@@ -1226,7 +1330,7 @@ def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_cl
     if not clicked_point_data or 'original_index' not in clicked_point_data:
         logger.warning(f"QC action '{triggered_button_id}' triggered, but no valid point selected.")
         notification = dbc.Alert("No point selected or index missing.", color="warning", dismissable=True)
-        return False, notification, updated_data_store, updated_table, updated_plot
+        return False, notification, updated_data_store, updated_table, updated_plot # Keep modal open? No, action failed.
 
     if not stored_json:
         logger.error(f"QC action '{triggered_button_id}' triggered, but data-store is empty.")
@@ -1248,8 +1352,9 @@ def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_cl
     try:
         df = pd.read_json(stored_json, orient='split')
         if 'Date' in df.columns:
+            # Convert stored dates (likely strings) to datetime objects for processing
             # NOTE: Decide if you need to normalize here or keep full timestamp from store
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce').normalize() # Keep normalizing for now
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce').normalize() # Keep normalizing for now for simplicity
         else:
              raise ValueError("Data store is missing 'Date' column.")
 
@@ -1281,40 +1386,48 @@ def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_cl
                           target_index = matches.index[0]
                           logger.warning(f"Index mismatch resolved by matching normalized date {clicked_dt_normalized.date()} to index {target_index}.")
                       elif len(matches) > 1:
-                          logger.error(f"Index mismatch: Multiple rows found for normalized date {clicked_dt_normalized.date()}. Cannot proceed.")
+                          # If multiple points have the same normalized date, we can't be sure which one was clicked
+                          # unless we add more customdata (like the value) to the plot click info.
+                          logger.error(f"Index mismatch: Multiple rows found for normalized date {clicked_dt_normalized.date()}. Cannot proceed unambiguously.")
                           raise ValueError(f"Ambiguous date {clicked_dt_normalized.date()} found.")
                       else:
                           logger.error(f"Index mismatch: No row found for normalized date {clicked_dt_normalized.date()} after index lookup failed.")
                  except Exception as date_match_e:
                       logger.error(f"Error during date fallback matching: {date_match_e}")
 
+        # Final check if we found a target index
         if target_index is None:
             logger.error(f"Could not definitively match clicked point (Original Index: {original_index_from_click}, Date: {date_clicked}) to DataFrame index (Type: {df.index.dtype}). Aborting action.")
             raise IndexError(f"Data mismatch: Point index {original_index_from_click} not found in DataFrame.")
 
         logger.info(f"Successfully matched clicked point to DataFrame index: {target_index}")
 
+        # Ensure essential columns exist before modification
         if 'Qualifiers' not in df.columns: df['Qualifiers'] = pd.Series(dtype='object')
         if 'ReviewStatus' not in df.columns: df['ReviewStatus'] = 'Unknown'
-        if 'DISCHARGE' not in df.columns: df['DISCHARGE'] = np.nan
+        if 'DISCHARGE' not in df.columns: df['DISCHARGE'] = np.nan # Should exist, but safety check
 
+        # --- Apply Action based on button clicked ---
         if triggered_button_id == 'qc-approve-button':
+            # Clear all flags for this point
             flags_to_clear = [col for col in ['FLAG_LESS_THAN_Min._Value','FLAG_ZERO','FLAG_REPEATED','FLAG_GREATER_THAN_MaxValue','UNUSUAL_SPIKE','FLAG_BELOW_CAPACITY', 'FLAGGED'] if col in df.columns]
             if flags_to_clear:
                  df.loc[target_index, flags_to_clear] = False
+            # Update status and qualifier
             df.loc[target_index, 'ReviewStatus'] = 'Approved'
             current_qual = df.loc[target_index, 'Qualifiers']
             if pd.isna(current_qual) or str(current_qual).strip() == '': new_qual = 'Approved'
             elif 'Approved' not in str(current_qual).split(';'): new_qual = f"{str(current_qual).strip()};Approved"
-            else: new_qual = current_qual
+            else: new_qual = current_qual # Already contains 'Approved'
             df.loc[target_index, 'Qualifiers'] = new_qual
             action_performed = "Approved"
 
         elif triggered_button_id == 'qc-interpolate-button':
             # NOTE: Interpolation logic assumes sorted data and uses row position,
             # may need refinement if dealing with irregular time series.
-            df = df.sort_values(by='Date')
+            df = df.sort_values(by='Date') # Ensure sorted by date
             try:
+                # Find the integer position (iloc) of the target index after sorting
                 loc_index = df.index.get_loc(target_index)
             except KeyError:
                  logger.error(f"Target index {target_index} not found after potential sort. Aborting interpolation.")
@@ -1322,23 +1435,24 @@ def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_cl
 
             prev_val, next_val = np.nan, np.nan
             prev_idx_pos, next_idx_pos = -1, -1
-            # Find previous non-NaN value's position
+            # Find previous non-NaN value's integer position (iloc)
             for i in range(loc_index - 1, -1, -1):
-                idx_prev = df.index[i]
+                idx_prev = df.index[i] # Get the actual index label at position i
                 if pd.notna(df.loc[idx_prev, 'DISCHARGE']):
                     prev_val = df.loc[idx_prev, 'DISCHARGE']
-                    prev_idx_pos = i
+                    prev_idx_pos = i # Store the integer position
                     break
-            # Find next non-NaN value's position
+            # Find next non-NaN value's integer position (iloc)
             for i in range(loc_index + 1, len(df)):
-                idx_next = df.index[i]
+                idx_next = df.index[i] # Get the actual index label at position i
                 if pd.notna(df.loc[idx_next, 'DISCHARGE']):
                     next_val = df.loc[idx_next, 'DISCHARGE']
-                    next_idx_pos = i
+                    next_idx_pos = i # Store the integer position
                     break
 
+            # Check if valid neighbors were found
             if pd.notna(prev_val) and pd.notna(next_val) and prev_idx_pos != -1 and next_idx_pos != -1:
-                # Simple linear interpolation based on position in sorted frame
+                # Simple linear interpolation based on integer position in sorted frame
                 interpolated_val = np.interp(loc_index, [prev_idx_pos, next_idx_pos], [prev_val, next_val])
                 df.loc[target_index, 'DISCHARGE'] = interpolated_val
                 df.loc[target_index, 'ReviewStatus'] = 'Interpolated'
@@ -1350,11 +1464,13 @@ def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_cl
                 logger.info(f"Interpolated value at index {target_index} (position {loc_index}) to {interpolated_val:.2f}")
                 action_performed = "Interpolated"
             else:
+                # Failed to interpolate
                 logger.warning(f"Cannot interpolate index {target_index}: Missing valid neighbors (prev={prev_val} at pos {prev_idx_pos}, next={next_val} at pos {next_idx_pos}).")
                 notification = dbc.Alert("Cannot interpolate: Missing valid neighbors.", color="warning", duration=4000, dismissable=True)
-                action_performed = None
+                action_performed = None # Ensure action is not marked as performed
 
         elif triggered_button_id == 'qc-delete-button':
+            # Set discharge to NaN
             df.loc[target_index, 'DISCHARGE'] = np.nan
             df.loc[target_index, 'ReviewStatus'] = 'Deleted'
             current_qual = df.loc[target_index, 'Qualifiers']
@@ -1364,10 +1480,12 @@ def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_cl
             df.loc[target_index, 'Qualifiers'] = new_qual
             action_performed = "Deleted (set to NaN)"
 
+        # --- Post-Action Processing (if action was successful) ---
         if action_performed and df is not None:
             logger.info(f"Action '{action_performed}' applied for index {target_index}. Re-flagging...")
             units = site_info.get('units', '?')
 
+            # Re-apply flagging logic
             if thresholds:
                 try:
                     # Ensure Date column is datetime before flagging
@@ -1377,45 +1495,54 @@ def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_cl
                     logger.info("Re-flagging complete after QC action.")
                 except Exception as flag_e:
                      logger.error(f"Error during re-flagging after QC action: {flag_e}", exc_info=True)
-                     notification = notification or dbc.Alert(f"Action applied, but error during re-flagging: {flag_e}. Save changes carefully.", color="danger", dismissable=True)
+                     # Append to notification if one already exists from interpolation failure etc.
+                     current_alert_children = notification.children if notification else ""
+                     notification = dbc.Alert(f"{current_alert_children} Action applied, but error during re-flagging: {flag_e}. Save changes carefully.", color="danger", dismissable=True)
             else:
                 logger.warning("No thresholds available for re-flagging after QC action!")
-                notification = notification or dbc.Alert("Action applied, but cannot re-flag (thresholds missing). Save changes carefully.", color="warning", dismissable=True)
+                current_alert_children = notification.children if notification else ""
+                notification = dbc.Alert(f"{current_alert_children} Action applied, but cannot re-flag (thresholds missing). Save changes carefully.", color="warning", dismissable=True)
 
+            # Prepare updated data for storage (convert datetime back to string)
             df_store_update = df.copy()
-            # Format Date for storage (adjust if using full timestamp)
             if 'Date' in df_store_update and pd.api.types.is_datetime64_any_dtype(df_store_update['Date']):
-                df_store_update['Date'] = df_store_update['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S')
+                df_store_update['Date'] = df_store_update['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S') # ISO format
             updated_data_store = df_store_update.to_json(orient='split', date_format='iso')
 
+            # Prepare data for table display (ensure datetime objects for date column)
             df_table_update = df.copy()
-            # Ensure Date is datetime for table creation
             if 'Date' in df_table_update and not pd.api.types.is_datetime64_any_dtype(df_table_update['Date']):
                  df_table_update['Date'] = pd.to_datetime(df_table_update['Date'], errors='coerce')
             updated_table = create_dash_data_table(df_table_update, units, 'editable-data-table', logger)
 
+            # Check if table creation failed
             if not isinstance(updated_table, dash_table.DataTable):
                 logger.error("Failed to recreate table after QC action.")
-                updated_table = html.Div("Error updating table.")
-                notification = notification or dbc.Alert("Action applied, but failed to update table.", color="danger")
+                updated_table = html.Div("Error updating table.") # Provide placeholder
+                current_alert_children = notification.children if notification else ""
+                notification = dbc.Alert(f"{current_alert_children} Action applied, but failed to update table.", color="danger")
 
-            # Re-generate plot (could be computationally expensive - alternative: update figure data)
-            # For simplicity, let's signal a full plot update is needed by returning no_update for now.
-            # A more advanced solution would modify the 'current_figure' object directly.
-            # Updated plot is NOT being generated here to avoid re-running generate_plot
-            updated_plot = no_update # Requires a manual "Update Plot" click to see changes reflected in plot
+            # Re-generating plot after every QC click can be slow.
+            # Returning no_update means the user has to click "Update Plot" manually.
+            # Consider adding a "Refresh Plot" button to the modal or updating the figure directly for a better UX.
+            updated_plot = no_update # Signal that plot needs manual refresh
 
-            notification = notification or dbc.Alert(f"Action '{action_performed}' applied successfully. Click 'Update Plot' to refresh graph. Save changes to export.", color="success", duration=5000, dismissable=True)
+            # Provide success feedback if no prior error notification exists
+            if not notification:
+                notification = dbc.Alert(f"Action '{action_performed}' applied successfully. Click 'Update Plot' to refresh graph. Save changes to export.", color="success", duration=5000, dismissable=True)
             logger.info(f"Store and table updated after '{action_performed}'. Plot refresh needed.")
 
         elif not action_performed and not notification:
-             notification = dbc.Alert(f"Action '{triggered_button_id}' could not be completed (e.g., missing neighbours for interpolation).", color="warning", dismissable=True)
+             # Case where action failed (e.g., interpolation) but didn't set a specific notification
+             notification = dbc.Alert(f"Action '{triggered_button_id}' could not be completed.", color="warning", dismissable=True)
 
+        # Close the modal and return updates
         return modal_is_open, notification, updated_data_store, updated_table, updated_plot
 
     except Exception as e:
         logger.error(f"Error during QC action '{triggered_button_id}' for index {original_index_from_click}: {e}", exc_info=True)
         notification = dbc.Alert(f"Error processing action '{triggered_button_id}': {e}", color="danger", dismissable=True)
+        # Keep modal closed on error, return no updates to data/table/plot
         return False, notification, no_update, no_update, no_update
 
 @callback(
@@ -1424,26 +1551,32 @@ def handle_qc_action(approve_clicks, interpolate_clicks, delete_clicks, close_cl
     prevent_initial_call=True
 )
 def update_url_on_data_change(site_info):
+    """Updates the URL query string when site info (like date range) changes."""
     if not site_info or not isinstance(site_info, dict):
         logger.debug("URL update skipped: site-info-store empty/invalid.")
         return no_update
+    # Get data needed for URL, check if they exist
     site_id = site_info.get('site_id'); start_date_str = site_info.get('start'); end_date_str = site_info.get('end')
     if not site_id or not start_date_str or not end_date_str:
         logger.warning(f"URL update skipped: Missing info in site-info: {site_info}")
         return no_update
+    # Validate date formats before creating URL
     try:
         datetime.strptime(start_date_str, '%Y-%m-%d'); datetime.strptime(end_date_str, '%Y-%m-%d')
     except (ValueError, TypeError):
         logger.warning(f"URL update skipped: Invalid date format in site-info: start='{start_date_str}', end='{end_date_str}'")
         return no_update
+    # Construct the query string
     query_string = f"?id={site_id}&start_date={start_date_str}&end_date={end_date_str}"
     logger.info(f"Updating URL search string to: {query_string}")
     return query_string
 
+
+# <<< MODIFIED: open_enter_data_modal includes time population >>>
 @callback(
     [Output('enter-data-modal', 'is_open', allow_duplicate=True),
      Output('notification-area', 'children', allow_duplicate=True),
-     Output('enter-time-input', 'value')], # <<< MODIFICATION: Added Output for time input value
+     Output('enter-time-input', 'value')], # Added Output for time input value
     Input('open-enter-data-modal-button', 'n_clicks'),
     State('site-info-store', 'data'),
     prevent_initial_call=True
@@ -1453,9 +1586,9 @@ def open_enter_data_modal(n_clicks, site_info):
         # Don't change anything if the button wasn't clicked
         return no_update, no_update, no_update
 
-    # <<< MODIFICATION START: Get current time if opening modal >>>
+    # Get current time formatted as HH:MM
+    # Using current system time where the server is running
     current_time_str = datetime.now().strftime('%H:%M')
-    # <<< MODIFICATION END >>>
 
     if site_info and site_info.get('site_id'):
         logger.info(f"Opening enter data modal. Setting time to {current_time_str}.")
@@ -1466,8 +1599,10 @@ def open_enter_data_modal(n_clicks, site_info):
         # Don't open modal, show notification, don't change time input
         alert = dbc.Alert("Load site data first before entering new measurements.", color="warning", duration=4000, dismissable=True)
         return False, alert, no_update
+# <<< END: Modified open_enter_data_modal >>>
 
-# <<< MODIFIED Callback Start >>>
+
+# <<< MODIFIED: handle_submit_new_data uses time input state >>>
 @callback(
     [Output('data-store', 'data', allow_duplicate=True),
      Output('table-container', 'children', allow_duplicate=True),
@@ -1496,11 +1631,12 @@ def handle_submit_new_data(n_clicks, new_date_str,
     # Added basic Time validation
     if not new_time_str:
          modal_errors.append("Please enter a time (e.g., HH:MM).")
-    # Add more robust time format validation here if needed (e.g., regex)
-    # Example:
-    # import re
-    # if not re.match(r"^\d{2}:\d{2}$", new_time_str):
-    #    modal_errors.append("Invalid time format. Use HH:MM.")
+    else:
+        # Optional: Add more robust time format validation here if needed
+        try:
+            datetime.strptime(new_time_str, '%H:%M')
+        except ValueError:
+            modal_errors.append("Invalid time format. Use HH:MM.")
 
     if new_discharge is None or str(new_discharge).strip() == '': modal_errors.append("Please enter a discharge value.")
 
@@ -1531,12 +1667,12 @@ def handle_submit_new_data(n_clicks, new_date_str,
             # --- NOTE: Current logic normalizes date (removes time). ---
             # If you want to store the specific time, you need to combine
             # new_date_str and new_time_str into a datetime object here
-            # and ensure the rest of the application handles datetimes.
+            # and ensure the rest of the application handles datetimes correctly.
             # Example (requires careful testing and updates elsewhere):
             # combined_dt_str = f"{new_date_str} {new_time_str}"
             # new_datetime = pd.to_datetime(combined_dt_str, format='%Y-%m-%d %H:%M', errors='raise')
             # --- Using date-only logic for now: ---
-            new_date = pd.to_datetime(new_date_str).normalize()
+            new_date = pd.to_datetime(new_date_str).normalize() # Processed date/time object
             # ---
         except (ValueError, TypeError):
              logger.error(f"Invalid date/time format from picker: Date='{new_date_str}', Time='{new_time_str}'")
@@ -1545,46 +1681,54 @@ def handle_submit_new_data(n_clicks, new_date_str,
         df = pd.read_json(stored_json, orient='split')
         if 'Date' in df.columns:
             # --- NOTE: Comparison based on normalized date. Adjust if using full timestamps ---
-            df['Date'] = pd.to_datetime(df['Date']).normalize()
+            # Convert existing data to datetime (normalized) for comparison
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce').normalize()
         else:
              raise ValueError("Data store missing 'Date' column.")
 
         # Check if the DATE already exists (adjust if checking full timestamp)
         if new_date in df['Date'].values:
             logger.warning(f"Date {new_date_str} already exists. Appending new entry (potential duplicate).")
+            # Optionally, you could add a warning in the modal alert here
 
+        # Ensure all necessary columns exist in the DataFrame before adding the new row
         base_cols = ['Date', 'DISCHARGE', 'ReviewStatus', 'Qualifiers', 'FLAGGED']
         flag_cols = ['FLAG_LESS_THAN_Min._Value','FLAG_ZERO','FLAG_REPEATED','FLAG_GREATER_THAN_MaxValue','UNUSUAL_SPIKE','FLAG_BELOW_CAPACITY']
         all_expected_cols = base_cols + flag_cols
         for col in all_expected_cols:
             if col not in df.columns:
                 logger.debug(f"Adding missing column '{col}' before appending new data.")
-                if col in ['Date', 'DISCHARGE']: continue
+                if col in ['Date', 'DISCHARGE']: continue # These will be in the new row
+                # Add default values for missing columns
                 if col == 'FLAGGED' or col.startswith('FLAG_'): df[col] = False
                 elif col == 'ReviewStatus': df[col] = 'Unknown'
                 elif col == 'Qualifiers': df[col] = pd.Series(dtype='object')
-                else: df[col] = np.nan
+                else: df[col] = np.nan # Default for potentially numeric flags if they were missing
 
+        # Create the new row dictionary
         new_row = {
-            'Date': new_date, # Use 'new_date' or 'new_datetime' if implemented
+            'Date': new_date, # Use the processed date/datetime variable here
             'DISCHARGE': new_discharge_float,
             'ReviewStatus': 'Entered',
             'Qualifiers': new_qualifier if new_qualifier else 'Manual Entry',
-            'FLAGGED': False,
+            'FLAGGED': False, # Initialize flags as False
+            # Initialize specific flag columns that exist in the DataFrame
             **{flag_col: False for flag_col in flag_cols if flag_col in df.columns}
         }
         new_row_df = pd.DataFrame([new_row])
 
+        # Append the new row and sort
         df = pd.concat([df, new_row_df], ignore_index=True)
         # --- NOTE: Sorting by 'Date' assumes it's comparable (date or datetime) ---
         df = df.sort_values(by='Date').reset_index(drop=True)
         logger.info(f"Appended new row for {new_date_str}. DataFrame size: {len(df)}")
 
         main_feedback = None
+        # Re-apply flagging logic
         if thresholds:
             logger.info("Re-flagging dataset after adding new row...")
             try:
-                # --- NOTE: Ensure correct Date type before flagging ---
+                # Ensure Date column is datetime before flagging
                 if 'Date' in df and not pd.api.types.is_datetime64_any_dtype(df['Date']):
                      df['Date'] = pd.to_datetime(df['Date'], errors='coerce') # Convert to datetime if needed
                 df = apply_flagging(df, thresholds, logger)
@@ -1597,34 +1741,37 @@ def handle_submit_new_data(n_clicks, new_date_str,
             logger.warning("Thresholds missing, skipping re-flagging.")
             main_feedback = dbc.Alert(f"Measurement for {new_date_str} added, thresholds missing for re-flagging.", color="warning", duration=5000, dismissable=True)
 
+        # Prepare updated data for storage (convert datetime back to string)
         df_store_updated = df.copy()
-        # --- NOTE: Adjust date formatting for storage if using full timestamps ---
         if 'Date' in df_store_updated and pd.api.types.is_datetime64_any_dtype(df_store_updated['Date']):
             df_store_updated['Date'] = df_store_updated['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S') # ISO format
         updated_json_store = df_store_updated.to_json(orient='split', date_format='iso')
 
+        # Prepare data for table display (ensure datetime objects for date column)
         df_table_update = df.copy()
-        # --- NOTE: Ensure correct Date type before creating table ---
         if 'Date' in df_table_update and not pd.api.types.is_datetime64_any_dtype(df_table_update['Date']):
             df_table_update['Date'] = pd.to_datetime(df_table_update['Date'], errors='coerce') # Ensure datetime for table helper
         new_table_component = create_dash_data_table(df_table_update, units, 'editable-data-table', logger)
 
+        # Check if table creation failed
         if not isinstance(new_table_component, dash_table.DataTable):
             logger.error("Failed to create table after adding data.")
-            new_table_component = html.Div("Error updating table.")
+            new_table_component = html.Div("Error updating table.") # Placeholder
             main_feedback = dbc.Alert("Measurement added, failed to update table.", color="danger")
+            # Still update the store even if table fails, but close modal and show error
             return updated_json_store, new_table_component, False, "Error updating table.", True, main_feedback
 
         logger.info(f"Successfully processed data for {new_date_str}.")
+        # Close modal, clear modal alert, show success feedback
         return updated_json_store, new_table_component, False, None, False, main_feedback
 
     except Exception as e:
         logger.error(f"Error adding new data for site {site_id}: {e}", exc_info=True)
         # Include time in error log context
         logger.error(f"(Input values: Date='{new_date_str}', Time='{new_time_str}', Discharge='{new_discharge}', Qualifier='{new_qualifier}')", exc_info=False)
+        # Keep modal open, show error in modal alert
         return no_update, no_update, True, f"An unexpected error occurred: {e}", True, no_update
-# <<< MODIFIED Callback End >>>
-
+# <<< END: Modified handle_submit_new_data >>>
 
 @callback(
     [Output('enter-data-modal', 'is_open', allow_duplicate=True),
@@ -1636,6 +1783,7 @@ def handle_submit_new_data(n_clicks, new_date_str,
 def cancel_enter_data_modal(cancel_clicks):
     if cancel_clicks:
         logger.debug("Closing enter data modal via Cancel.")
+        # Close modal, clear any alerts
         return False, None, False
     return no_update, no_update, no_update
 
@@ -1653,13 +1801,16 @@ def cancel_enter_data_modal(cancel_clicks):
 def open_add_multiple_data_modal(n_clicks, site_info):
     if not n_clicks:
         return no_update, no_update, no_update
+    # Reset the input table to blank rows when opening
     initial_data = get_initial_input_table_data()
     if site_info and site_info.get('site_id'):
         logger.info("Opening add multiple data modal and resetting input table.")
         return True, no_update, initial_data
     else:
         logger.warning("Cannot open Add Multiple Data modal: No site data loaded.")
-        return False, dbc.Alert("Load site data first before adding multiple measurements.", color="warning", duration=4000, dismissable=True), initial_data
+        # Don't open modal, show notification, provide initial (empty) table data structure
+        alert = dbc.Alert("Load site data first before adding multiple measurements.", color="warning", duration=4000, dismissable=True)
+        return False, alert, initial_data
 
 
 @callback(
@@ -1683,6 +1834,7 @@ def handle_submit_multiple_data(n_clicks, input_table_data, stored_json, site_in
     if stored_json is None or site_info is None:
         logger.error("Cannot add multiple data points: Missing current data-store or site-info-store.")
         main_notification = dbc.Alert("Error: Cannot add data, session context is missing. Please reload.", color="danger")
+        # Keep modal open and show error inside modal
         return no_update, no_update, True, "Session data missing. Cannot proceed.", True, main_notification
 
     site_id = site_info.get('site_id'); units = site_info.get('units', '?')
@@ -1691,97 +1843,116 @@ def handle_submit_multiple_data(n_clicks, input_table_data, stored_json, site_in
     modal_errors = []
     valid_new_data_rows = []
     submitted_dates_for_dup_check = []
+    has_actual_input = False # Flag to check if any non-empty rows were submitted
 
     if not input_table_data:
         modal_errors.append("No data entered or pasted into the table.")
+    else:
+        for i, row in enumerate(input_table_data):
+            row_num = i + 1
+            date_str = row.get('Date')
+            discharge_val = row.get('Discharge')
+            qualifier_val = row.get('Qualifier')
 
-    for i, row in enumerate(input_table_data):
-        row_num = i + 1
-        date_str = row.get('Date')
-        discharge_val = row.get('Discharge')
-        qualifier_val = row.get('Qualifier')
+            # Skip completely empty rows silently
+            if (date_str is None or str(date_str).strip() == "") and \
+               (discharge_val is None or str(discharge_val).strip() == "") and \
+               (qualifier_val is None or str(qualifier_val).strip() == ""):
+                continue
 
-        # Skip completely empty rows
-        if (date_str is None or str(date_str).strip() == "") and \
-           (discharge_val is None or str(discharge_val).strip() == ""):
-            continue
+            has_actual_input = True # Mark that we found at least one row with some data
+            row_has_error = False
+            validated_date = None
+            discharge_float = None
 
-        row_has_error = False
-        validated_date = None
-        discharge_float = None
-
-        if date_str is None or str(date_str).strip() == "":
-            modal_errors.append(f"Row {row_num}: Date is missing.")
-            row_has_error = True
-        else:
-            try:
-                # Try specific format first
-                validated_date = datetime.strptime(str(date_str).strip(), '%Y-%m-%d').date()
-                submitted_dates_for_dup_check.append(validated_date)
-            except (ValueError, TypeError):
-                 try:
-                     # Fallback to general pandas parsing
-                     parsed_dt = pd.to_datetime(str(date_str).strip(), errors='coerce')
-                     if pd.isna(parsed_dt):
-                         modal_errors.append(f"Row {row_num}: Invalid date format ('{date_str}'). Use YYYY-MM-DD.")
+            # Validate Date
+            if date_str is None or str(date_str).strip() == "":
+                # Date is required if discharge is present
+                if discharge_val is not None and str(discharge_val).strip() != "":
+                    modal_errors.append(f"Row {row_num}: Date is missing but Discharge is present.")
+                    row_has_error = True
+                # If discharge is also missing, we already skipped this row
+            else:
+                try:
+                    # Try specific format first
+                    validated_date = datetime.strptime(str(date_str).strip(), '%Y-%m-%d').date()
+                    submitted_dates_for_dup_check.append(validated_date)
+                except (ValueError, TypeError):
+                     try:
+                         # Fallback to general pandas parsing
+                         parsed_dt = pd.to_datetime(str(date_str).strip(), errors='coerce')
+                         if pd.isna(parsed_dt):
+                             modal_errors.append(f"Row {row_num}: Invalid date format ('{date_str}'). Use YYYY-MM-DD.")
+                             row_has_error = True
+                         else:
+                             validated_date = parsed_dt.date()
+                             submitted_dates_for_dup_check.append(validated_date)
+                             logger.warning(f"Parsed potentially ambiguous date format '{date_str}' for row {row_num} as {validated_date}. Please use YYYY-MM-DD.")
+                     except Exception as e_parse:
+                         modal_errors.append(f"Row {row_num}: Error parsing date ('{date_str}'): {e_parse}. Use YYYY-MM-DD.")
                          row_has_error = True
-                     else:
-                         validated_date = parsed_dt.date()
-                         submitted_dates_for_dup_check.append(validated_date)
-                         logger.warning(f"Parsed potentially ambiguous date format '{date_str}' for row {row_num} as {validated_date}. Please use YYYY-MM-DD.")
-                 except Exception as e_parse:
-                     modal_errors.append(f"Row {row_num}: Error parsing date ('{date_str}'): {e_parse}. Use YYYY-MM-DD.")
+
+            # Validate Discharge
+            if discharge_val is None or str(discharge_val).strip() == "":
+                 # Discharge is required if date is present
+                 if date_str is not None and str(date_str).strip() != "":
+                     modal_errors.append(f"Row {row_num}: Discharge value is missing but Date is present.")
                      row_has_error = True
+                 # If date is also missing, we already skipped this row
+            else:
+                try:
+                    discharge_float = float(discharge_val)
+                except (ValueError, TypeError):
+                    modal_errors.append(f"Row {row_num}: Invalid discharge value '{discharge_val}'. Must be a number.")
+                    row_has_error = True
 
-        if discharge_val is None or str(discharge_val).strip() == "":
-            modal_errors.append(f"Row {row_num}: Discharge value is missing.")
-            row_has_error = True
-        else:
-            try:
-                discharge_float = float(discharge_val)
-            except (ValueError, TypeError):
-                modal_errors.append(f"Row {row_num}: Invalid discharge value '{discharge_val}'. Must be a number.")
-                row_has_error = True
+            # If no errors for this row, add it to the list of valid rows
+            if not row_has_error and validated_date is not None and discharge_float is not None:
+                valid_new_data_rows.append({
+                    'date': validated_date,
+                    'discharge': discharge_float,
+                    'qualifier': qualifier_val if qualifier_val else 'Manual Paste Entry'
+                })
+            elif not row_has_error and (validated_date or discharge_float):
+                 # This case should ideally not be hit if validation is correct
+                 logger.error(f"Row {row_num} had no errors but data was not fully captured. Date: {validated_date}, Discharge: {discharge_float}")
+                 modal_errors.append(f"Row {row_num}: Internal error processing potentially valid data.")
 
-        if not row_has_error and validated_date is not None and discharge_float is not None:
-            valid_new_data_rows.append({
-                'date': validated_date,
-                'discharge': discharge_float,
-                'qualifier': qualifier_val if qualifier_val else 'Manual Paste Entry'
-            })
-        elif not row_has_error:
-             logger.error(f"Row {row_num} had no errors but data was not captured. Date: {validated_date}, Discharge: {discharge_float}")
-             modal_errors.append(f"Row {row_num}: Internal error processing valid data.")
-
+    # After checking all rows:
+    # Check for duplicate dates within the submitted valid entries
     if not modal_errors and valid_new_data_rows:
         date_counts = Counter(submitted_dates_for_dup_check)
-        duplicates = [d.strftime('%Y-%m-%d') for d, count in date_counts.items() if count > 1]
+        duplicates = sorted([d.strftime('%Y-%m-%d') for d, count in date_counts.items() if count > 1])
         if duplicates:
-            modal_errors.append(f"Duplicate dates found within the submitted entries: {', '.join(duplicates)}. Please ensure all dates are unique.")
+            modal_errors.append(f"Duplicate dates found within the submitted entries: {', '.join(duplicates)}. Please ensure all dates are unique before submitting.")
 
-    if not modal_errors and not valid_new_data_rows and input_table_data and any(row.get('Date') or row.get('Discharge') for row in input_table_data):
-         # Check if there was input data but none was valid
-         modal_errors.append("No valid data rows found in the table. Ensure Date (YYYY-MM-DD) and Discharge (number) are provided.")
+    # Check if input was provided but none of it was valid
+    if not modal_errors and not valid_new_data_rows and has_actual_input:
+         modal_errors.append("No valid data rows found. Ensure each row has both a Date (YYYY-MM-DD) and a numeric Discharge value.")
 
+    # If any errors were found, display them in the modal and keep it open
     if modal_errors:
-        error_message = html.Div([html.P("Please correct the following errors:")] + [html.Li(msg) for msg in modal_errors], style={'maxHeight': '40vh', 'overflowY': 'auto'})
+        error_message = html.Div([html.P("Please correct the following errors:")] + [html.Li(msg) for msg in modal_errors], style={'maxHeight': '40vh', 'overflowY': 'auto', 'color': 'red'})
         return no_update, no_update, True, error_message, True, no_update
 
+    # --- If validation passed ---
     try:
         df = pd.read_json(stored_json, orient='split')
         if 'Date' in df.columns:
              # --- NOTE: Normalize existing dates for comparison. Adjust if using full timestamps ---
-             df['Date'] = pd.to_datetime(df['Date']).normalize()
+             df['Date'] = pd.to_datetime(df['Date'], errors='coerce').normalize()
         else:
              raise ValueError("Data store missing 'Date' column.")
 
+        # Check for duplicates against existing data (optional warning)
         existing_dates = set(df['Date'].dt.date)
         submitted_dates_obj = [row['date'] for row in valid_new_data_rows]
-        duplicates_with_existing = [d.strftime('%Y-%m-%d') for d in submitted_dates_obj if d in existing_dates]
+        duplicates_with_existing = sorted([d.strftime('%Y-%m-%d') for d in submitted_dates_obj if d in existing_dates])
         if duplicates_with_existing:
             logger.warning(f"Dates {duplicates_with_existing} already exist in the dataset. Appending new entries (potential duplicates).")
-            # Optionally add a modal warning here if strict uniqueness is required
+            # Optionally add a non-blocking warning in the main notification area upon success
 
+        # Ensure all necessary columns exist before adding new data
         base_cols = ['Date', 'DISCHARGE', 'ReviewStatus', 'Qualifiers', 'FLAGGED']
         flag_cols = ['FLAG_LESS_THAN_Min._Value','FLAG_ZERO','FLAG_REPEATED','FLAG_GREATER_THAN_MaxValue','UNUSUAL_SPIKE','FLAG_BELOW_CAPACITY']
         all_expected_cols = base_cols + flag_cols
@@ -1794,6 +1965,7 @@ def handle_submit_multiple_data(n_clicks, input_table_data, stored_json, site_in
                 elif col == 'Qualifiers': df[col] = pd.Series(dtype='object')
                 else: df[col] = np.nan
 
+        # Prepare list of dictionaries for the new rows
         new_rows_prepared = []
         for row_data in valid_new_data_rows:
             new_rows_prepared.append({
@@ -1803,9 +1975,10 @@ def handle_submit_multiple_data(n_clicks, input_table_data, stored_json, site_in
                 'ReviewStatus': 'Entered',
                 'Qualifiers': row_data['qualifier'],
                 'FLAGGED': False,
-                **{flag_col: False for flag_col in flag_cols if flag_col in df.columns}
+                **{flag_col: False for flag_col in flag_cols if flag_col in df.columns} # Initialize existing flags
             })
 
+        # Create DataFrame from new rows and concatenate
         new_rows_df = pd.DataFrame(new_rows_prepared)
         df = pd.concat([df, new_rows_df], ignore_index=True)
         # --- NOTE: Sorting by 'Date'. Adjust if using full timestamps ---
@@ -1813,6 +1986,7 @@ def handle_submit_multiple_data(n_clicks, input_table_data, stored_json, site_in
         logger.info(f"Appended {len(new_rows_df)} new rows from input table. DataFrame size now: {len(df)}")
 
         main_feedback = None
+        # Re-apply flagging logic
         if thresholds:
             logger.info("Re-flagging entire dataset after adding multiple rows...")
             try:
@@ -1821,7 +1995,9 @@ def handle_submit_multiple_data(n_clicks, input_table_data, stored_json, site_in
                      df['Date'] = pd.to_datetime(df['Date'], errors='coerce') # Ensure datetime
                  df = apply_flagging(df, thresholds, logger)
                  logger.info("Re-flagging complete.")
-                 main_feedback = dbc.Alert(f"{len(new_rows_df)} measurements added and data re-flagged. Save changes to export.", color="success", duration=4000, dismissable=True)
+                 # Add warning about existing duplicates if any were found
+                 dup_warning = f" Warning: Dates already existed for {', '.join(duplicates_with_existing)}." if duplicates_with_existing else ""
+                 main_feedback = dbc.Alert(f"{len(new_rows_df)} measurements added and data re-flagged.{dup_warning} Save changes to export.", color="success", duration=6000, dismissable=True)
             except Exception as flag_e:
                  logger.error(f"Error during re-flagging after multi-add: {flag_e}", exc_info=True)
                  main_feedback = dbc.Alert(f"{len(new_rows_df)} measurements added, but error during re-flagging: {flag_e}. Save changes carefully.", color="danger", duration=5000, dismissable=True)
@@ -1829,29 +2005,33 @@ def handle_submit_multiple_data(n_clicks, input_table_data, stored_json, site_in
             logger.warning("Thresholds not available, skipping re-flagging after adding data.")
             main_feedback = dbc.Alert(f"{len(new_rows_df)} measurements added, but thresholds missing for re-flagging. Save changes to export.", color="warning", duration=5000, dismissable=True)
 
+        # Prepare updated data for storage (convert datetime back to string)
         df_store_updated = df.copy()
-        # --- NOTE: Adjust date formatting for storage if using full timestamps ---
         if 'Date' in df_store_updated and pd.api.types.is_datetime64_any_dtype(df_store_updated['Date']):
             df_store_updated['Date'] = df_store_updated['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S') # ISO format
         updated_json_store = df_store_updated.to_json(orient='split', date_format='iso')
 
+        # Prepare data for table display (ensure datetime objects for date column)
         df_table_update = df.copy()
-        # --- NOTE: Ensure correct Date type before creating table ---
         if 'Date' in df_table_update and not pd.api.types.is_datetime64_any_dtype(df_table_update['Date']):
              df_table_update['Date'] = pd.to_datetime(df_table_update['Date'], errors='coerce') # Ensure datetime
         new_table_component = create_dash_data_table(df_table_update, units, 'editable-data-table', logger)
 
+        # Check if table creation failed
         if not isinstance(new_table_component, dash_table.DataTable):
             logger.error("Failed to create table component after adding multiple data points.")
-            new_table_component = html.Div("Error updating table display.")
+            new_table_component = html.Div("Error updating table display.") # Placeholder
             main_feedback = dbc.Alert("Measurements added, but failed to update table display.", color="danger")
+            # Close modal even if table fails, show error in main area
             return updated_json_store, new_table_component, False, None, False, main_feedback
 
         logger.info(f"Successfully added and processed {len(new_rows_df)} data points from table.")
+        # Close modal, clear modal alert, show success feedback in main area
         return updated_json_store, new_table_component, False, None, False, main_feedback
 
     except Exception as e:
         logger.error(f"Error adding multiple new data points for site {site_id}: {e}", exc_info=True)
+        # Keep modal open, show error in modal alert
         return no_update, no_update, True, f"An unexpected error occurred: {e}", True, no_update
 
 
@@ -1865,6 +2045,7 @@ def handle_submit_multiple_data(n_clicks, input_table_data, stored_json, site_in
 def cancel_add_multiple_data_modal(cancel_clicks):
     if cancel_clicks:
         logger.debug("Closing add multiple data modal via Cancel button.")
+        # Close modal, clear any alerts inside it
         return False, None, False
     return no_update, no_update, no_update
 
